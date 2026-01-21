@@ -2,3 +2,5 @@ streamlit
 requests
 ephem
 pytz
+matplotlib
+fpdf
