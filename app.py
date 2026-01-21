@@ -220,4 +220,103 @@ def draw_chart_visual(bodies_data, cusps):
         next_c = cusps[i+1] if i < 12 else cusps[1]
         diff = (next_c - cusps[i]) % 360
         mid = math.radians(cusps[i] + diff/2)
-        ax.text(mid, 0.4, str(i), color='#888', ha='center
+        ax.text(mid, 0.4, str(i), color='#888', ha='center', fontweight='bold')
+
+    ax.plot(np.linspace(0, 2*np.pi, 100), [1.2]*100, color='#FFD700', linewidth=2)
+    for i in range(12):
+        deg = i * 30 + 15
+        rad = math.radians(deg)
+        rot = deg - 180
+        ax.text(rad, 1.3, ZODIAC_SYMBOLS[i], ha='center', color='#FFD700', fontsize=16, rotation=rot)
+        sep = math.radians(i*30)
+        ax.plot([sep, sep], [1.15, 1.25], color='#FFD700')
+
+    for name, sign, deg, sym in bodies_data:
+        rad = math.radians(deg)
+        color = '#FF4B4B' if name in ['ASC', 'MC'] else 'white'
+        size = 14 if name in ['ASC', 'MC'] else 11
+        ax.plot(rad, 1.05, 'o', color=color, markersize=size, markeredgecolor='#FFD700')
+        ax.text(rad, 1.17, sym, color=color, fontsize=12, ha='center')
+    return fig
+
+# --- PDF ---
+def create_pdf(name, info, ai_text):
+    try:
+        pdf = FPDF()
+        pdf.add_page()
+        safe_name = clean_text_for_pdf(name)
+        safe_info = clean_text_for_pdf(info)
+        safe_ai = clean_text_for_pdf(ai_text)
+        
+        pdf.set_font("Arial", 'B', 16); pdf.cell(0, 10, f"ANALIZ: {safe_name}", ln=True, align='C')
+        pdf.set_font("Arial", '', 12); pdf.cell(0, 10, safe_info, ln=True, align='C')
+        pdf.ln(5)
+        pdf.set_font("Arial", 'B', 14); pdf.cell(0, 10, "YORUM", ln=True)
+        pdf.set_font("Arial", '', 11); pdf.multi_cell(0, 8, safe_ai)
+        return pdf.output(dest='S').encode('latin-1', 'ignore')
+    except: return None
+
+def get_ai(prompt):
+    try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+        resp = requests.post(url, headers={'Content-Type': 'application/json'}, data=json.dumps({"contents": [{"parts": [{"text": prompt}]}]}))
+        return resp.json()['candidates'][0]['content']['parts'][0]['text'] if resp.status_code==200 else "AI Hatası"
+    except Exception as e: return str(e)
+
+# --- ARAYÜZ ---
+st.title("🌌 Astro-Analiz Pro (Final)")
+# GÜVENLİK DUVARI
+def check_password():
+    if "password_correct" not in st.session_state: st.session_state["password_correct"] = False
+    def password_entered():
+        if st.session_state["password"] == st.secrets["APP_PASSWORD"]: st.session_state["password_correct"] = True
+        else: st.session_state["password_correct"] = False
+    if st.session_state["password_correct"]: return True
+    st.text_input("Şifre", type="password", on_change=password_entered, key="password"); return False
+
+if not check_password(): st.stop()
+
+with st.sidebar:
+    st.header("Giriş")
+    name = st.text_input("İsim", "Ziyaretçi")
+    d_date = st.date_input("Tarih", value=datetime(1980, 11, 26))
+    d_time = st.time_input("Saat", value=datetime.strptime("16:00", "%H:%M"), step=60)
+    st.caption("Saat Dilimi (GMT)")
+    utc_offset = st.number_input("GMT Farkı", value=3, min_value=-12, max_value=12, step=1)
+    city = st.text_input("Şehir", "İstanbul")
+    st.write("---")
+    transit_mode = st.checkbox("Transit Modu")
+    start_date = datetime.now().date()
+    end_date = datetime.now().date() + timedelta(days=365)
+    if transit_mode:
+        c1, c2 = st.columns(2)
+        start_date = c1.date_input("Başlangıç", start_date)
+        end_date = c2.date_input("Bitiş", end_date)
+    st.write("---")
+    c1, c2 = st.columns(2)
+    lat = c1.number_input("Enlem", 41.0) + c2.number_input("Dakika", 1.0)/60
+    c3, c4 = st.columns(2)
+    lon = c3.number_input("Boylam", 28.0) + c4.number_input("Dakika", 57.0)/60
+    q = st.text_area("Soru", "Genel yorum?")
+    btn = st.button("Analiz Et ✨")
+
+if btn:
+    info_html, ai_data, vis_data, cusps, aspects, transit_html, err = calculate_chart(name, d_date, d_time, lat, lon, utc_offset, transit_mode, start_date, end_date)
+    if err: st.error(err)
+    else:
+        tab1, tab2, tab3 = st.tabs(["📝 Yorum", "🗺️ Harita", "📊 Veri"])
+        with st.spinner("Yıldızlar inceleniyor..."):
+            ai_reply = get_ai(f"Sen astrologsun. Kişi: {name}, {city}. Soru: {q}.\n\nVERİLER:\n{ai_data}\n\nGÖREV: Transit varsa öngörü yap. Detaylı yorumla.")
+        with tab1:
+            st.markdown(ai_reply)
+            pdf_bytes = create_pdf(name, f"{d_date} - {city}", ai_reply)
+            if pdf_bytes: st.download_button("PDF İndir", pdf_bytes, "analiz.pdf", "application/pdf")
+            else: st.warning("PDF oluşturulamadı.")
+        with tab2: st.pyplot(draw_chart_visual(vis_data, cusps))
+        with tab3:
+            c1, c2 = st.columns(2)
+            with c1: st.markdown(info_html, unsafe_allow_html=True)
+            with c2: 
+                st.markdown("### AÇILAR")
+                for a in aspects: st.markdown(f"<div class='aspect-box'>{a}</div>", unsafe_allow_html=True)
+                if transit_mode: st.markdown(transit_html, unsafe_allow_html=True)
