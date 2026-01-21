@@ -1,8 +1,9 @@
 import streamlit as st
-import google.generativeai as genai
 import ephem
 import math
 from datetime import datetime
+import requests
+import json
 
 # --- SAYFA AYARLARI ---
 st.set_page_config(page_title="Astro-Analiz Pro", layout="wide", page_icon="🔮")
@@ -10,31 +11,36 @@ st.set_page_config(page_title="Astro-Analiz Pro", layout="wide", page_icon="🔮
 # --- API ANAHTARI KONTROLÜ ---
 if "GOOGLE_API_KEY" in st.secrets:
     api_key = st.secrets["GOOGLE_API_KEY"]
-    genai.configure(api_key=api_key)
 else:
-    st.error("🚨 API Anahtarı Bulunamadı! Lütfen Streamlit ayarlarından 'Secrets' kısmını kontrol edin.")
+    st.error("🚨 HATA: API Anahtarı 'Secrets' kısmında bulunamadı!")
     st.stop()
 
-# --- MODEL FONKSİYONU (HATA GÖSTEREN) ---
+# --- DİREKT BAĞLANTI FONKSİYONU (KÜTÜPHANESİZ) ---
 def get_ai_response(prompt):
-    # Denenecek modeller
-    models = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-1.0-pro']
+    # Google'ın en yeni ve hızlı modeli
+    model_name = "gemini-1.5-flash"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
     
-    error_log = ""
-    for m in models:
-        try:
-            model = genai.GenerativeModel(m)
-            response = model.generate_content(prompt)
-            return response.text
-        except Exception as e:
-            # Hatayı kaydet ama devam et
-            error_log += f"\n❌ {m} Modeli Hatası: {str(e)}\n"
-            continue
+    headers = {'Content-Type': 'application/json'}
+    data = {
+        "contents": [{
+            "parts": [{"text": prompt}]
+        }]
+    }
+    
+    try:
+        # Direkt internet isteği gönderiyoruz (Requests)
+        response = requests.post(url, headers=headers, data=json.dumps(data))
+        
+        if response.status_code == 200:
+            return response.json()['candidates'][0]['content']['parts'][0]['text']
+        else:
+            return f"⚠️ **HATA:** Google sunucusu {response.status_code} koduyla yanıt verdi.\nDetay: {response.text}"
             
-    # Eğer hepsi başarısız olursa hatayı göster
-    return f"⚠️ **AI BAĞLANTI HATASI** ⚠️\n\nLütfen bu hatayı kopyalayıp asistana gönder:\n```text{error_log}```"
+    except Exception as e:
+        return f"⚠️ **BAĞLANTI HATASI:** {str(e)}"
 
-# --- HESAPLAMA (EPHEM) ---
+# --- HESAPLAMA (NASA/EPHEM) ---
 ZODIAC = ["Koç", "Boğa", "İkizler", "Yengeç", "Aslan", "Başak", "Terazi", "Akrep", "Yay", "Oğlak", "Kova", "Balık"]
 
 def calculate_chart(name, d_date, d_time, lat, lon):
@@ -61,7 +67,8 @@ def calculate_chart(name, d_date, d_time, lat, lon):
     except Exception as e: return None, str(e)
 
 # --- ARAYÜZ ---
-st.title("🔮 Astro-Analiz (AI Destekli)")
+st.title("🔮 Astro-Analiz (Final Sürüm)")
+st.caption("NASA Verisi + Google Gemini (Direkt Bağlantı)")
 
 with st.sidebar:
     st.header("Giriş Paneli")
