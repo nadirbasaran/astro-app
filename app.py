@@ -1,9 +1,9 @@
 import streamlit as st
-# --- KRİTİK AYAR: Grafik motorunu 'Penceresiz' moda alıyoruz ---
+# --- KRİTİK AYAR: Siyah Ekran Çözümü (Penceresiz Mod) ---
 import matplotlib
 matplotlib.use('Agg') 
 import matplotlib.pyplot as plt
-# -------------------------------------------------------------
+# --------------------------------------------------------
 import ephem
 import math
 from datetime import datetime
@@ -135,4 +135,95 @@ def create_pdf(name, birth_info, ai_comment, technical_data_summary):
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", 'B', 20)
-    pdf.cell(0, 15, txt=clean_text_for_pdf(f"ASTRO
+    # HATA VEREN KISIM BURASIYDI, ŞİMDİ DÜZELTİLDİ:
+    pdf.cell(0, 15, txt=clean_text_for_pdf(f"ASTRO-ANALIZ: {name.upper()}"), ln=True, align='C')
+    pdf.ln(10)
+    pdf.set_font("Arial", size=12)
+    pdf.cell(0, 10, txt=clean_text_for_pdf(f"Dogum: {birth_info}"), ln=True, align='C')
+    pdf.ln(5)
+    pdf.set_font("Arial", 'B', 14)
+    pdf.cell(0, 10, txt="YAPAY ZEKA YORUMU", ln=True)
+    pdf.set_font("Arial", size=11)
+    pdf.multi_cell(0, 8, txt=clean_text_for_pdf(ai_comment))
+    pdf.ln(10)
+    pdf.set_font("Arial", 'B', 14)
+    pdf.cell(0, 10, txt="TEKNIK VERILER", ln=True)
+    pdf.set_font("Arial", size=10)
+    
+    clean_tech = technical_data_summary.replace("**", "")
+    pdf.multi_cell(0, 8, txt=clean_text_for_pdf(clean_tech))
+    return pdf.output(dest='S').encode('latin-1', 'ignore')
+
+# --- AI İSTEK ---
+def get_ai_response(prompt):
+    try:
+        list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
+        list_resp = requests.get(list_url)
+        target_model = ""
+        for m in list_resp.json().get('models', []):
+            if 'generateContent' in m.get('supportedGenerationMethods', []):
+                target_model = m['name']
+                break
+        if not target_model: return "Model bulunamadı."
+        
+        url = f"https://generativelanguage.googleapis.com/v1beta/{target_model}:generateContent?key={api_key}"
+        headers = {'Content-Type': 'application/json'}
+        data = {"contents": [{"parts": [{"text": prompt}]}]}
+        resp = requests.post(url, headers=headers, data=json.dumps(data))
+        if resp.status_code == 200:
+            return resp.json()['candidates'][0]['content']['parts'][0]['text']
+        else: return f"Hata: {resp.text}"
+    except Exception as e: return str(e)
+
+# --- ARAYÜZ YAPISI ---
+st.title("🌌 Astro-Analiz Pro")
+st.markdown("### ✨ Yıldızların Gizemli Rehberliği")
+
+with st.sidebar:
+    st.header("Giriş Paneli")
+    name = st.text_input("İsim", "Ziyaretçi")
+    d_date = st.date_input("Tarih", value=datetime(1980, 11, 26))
+    d_time = st.time_input("Saat", value=datetime.strptime("16:00", "%H:%M"))
+    city = st.text_input("Şehir", "İstanbul")
+    st.write("---")
+    st.write("📍 **Hassas Koordinat**")
+    c1, c2 = st.columns(2)
+    lat_deg = c1.number_input("Enlem (°)", value=41, step=1)
+    lat_min = c2.number_input("Enlem (')", value=1, step=1, min_value=0, max_value=59)
+    c3, c4 = st.columns(2)
+    lon_deg = c3.number_input("Boylam (°)", value=28, step=1)
+    lon_min = c4.number_input("Boylam (')", value=57, step=1, min_value=0, max_value=59)
+    q = st.text_area("Soru", "Kariyerim hakkında yorumlar mısın?")
+    btn = st.button("Analiz Et ✨", type="primary")
+
+if btn:
+    display_data, ai_data_prompt, visual_data, err = calculate_chart_precise(
+        name, d_date, d_time, lat_deg, lat_min, lon_deg, lon_min
+    )
+    if err:
+        st.error(err)
+    else:
+        tab1, tab2, tab3 = st.tabs(["📝 Detaylı Yorum", "🗺️ Astro-Harita", "📊 Teknik Veriler"])
+        
+        with st.spinner("Kozmik veriler işleniyor..."):
+            prompt = f"""
+            Sen uzman astrologsun. Danışan: {name}. Doğum: {d_date} {d_time}. Yer: {city}.
+            Soru: {q}
+            KESİN KONUMLAR:
+            {ai_data_prompt}
+            GÖREV: Yükselen burcu ve evleri bu koordinatlara göre hesapla, evleri yorumla ve soruyu cevapla.
+            """
+            ai_reply = get_ai_response(prompt)
+        
+        with tab1:
+            st.markdown(ai_reply)
+            birth_info_str = f"{d_date.strftime('%d.%m.%Y')} - {d_time.strftime('%H:%M')} - {city}"
+            pdf_bytes = create_pdf(name, birth_info_str, ai_reply, display_data)
+            st.download_button("📜 Raporu PDF İndir", data=pdf_bytes, file_name=f"astro_{name}.pdf", mime="application/pdf")
+
+        with tab2:
+            fig = draw_chart_visual(visual_data)
+            st.pyplot(fig, use_container_width=True)
+            
+        with tab3:
+            st.markdown(display_data)
