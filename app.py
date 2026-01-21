@@ -82,20 +82,21 @@ def normalize(deg):
     return deg % 360
 
 def calculate_placidus_cusps_precise(utc_dt, lat, lon):
-    # Ephem Observer oluştur
     obs = ephem.Observer()
     obs.date = utc_dt
-    obs.epoch = utc_dt # ÖNEMLİ: House hesapları için de Epoch of Date kullan
+    # DÜZELTME: Epoch'u 'date' özelliğinden kopyalıyoruz. Bu en güvenli yöntemdir.
+    obs.epoch = obs.date 
     obs.lat, obs.lon = str(lat), str(lon)
     
-    # Gerçek Verileri Çek (Dinamik Obliquity)
     ramc = float(obs.sidereal_time())
-    # J2000 (23.44) yerine o günkü gerçek Ecliptic eğikliğini kullanıyoruz
-    ecl = ephem.Ecliptic(obs) 
-    eps = float(ecl.obliquity) # Radyan döner
+    
+    # Ecliptic Obliquity (Epoch of Date)
+    ecl = ephem.Ecliptic(obs)
+    eps = float(ecl.obliquity)
+    
     lat_rad = math.radians(lat)
     
-    # --- KÖŞE EVLER (MC & ASC) ---
+    # Köşe Evler
     mc_rad = math.atan2(math.tan(ramc), math.cos(eps))
     mc_deg = normalize(math.degrees(mc_rad))
     if not (0 <= abs(mc_deg - math.degrees(ramc)) <= 90 or 0 <= abs(mc_deg - math.degrees(ramc) - 360) <= 90):
@@ -106,55 +107,21 @@ def calculate_placidus_cusps_precise(utc_dt, lat, lon):
     asc_deg = normalize(math.degrees(asc_rad))
     dsc_deg = normalize(asc_deg + 180)
 
-    # --- ARA EVLER (PLACIDUS ITERATION) ---
-    # Bu iterasyon, Placidus'un "Zaman" bazlı eğrilerini matematiksel çözer.
-    # Güneş'in 8. Eve yanlış düşmesini engelleyen asıl matematik budur.
-    
-    def get_cusp(deg_offset, f):
-        # Semi-arc iterative solution
-        r = ramc + math.radians(deg_offset)
-        guess = r
-        for _ in range(5):
-            # sin(declination)
-            sind = math.sin(eps) * math.sin(guess)
-            # tan(declination) = sind / cosd
-            # pole height math
-            try:
-                numer = math.tan(lat_rad) * math.tan(math.asin(sind))
-                ad = math.asin(numer) * f
-            except: ad = 0
-            
-            # RA to Longitude conversion
-            x = math.atan2(math.tan(r) * math.cos(math.asin(sind)), math.cos(r+ad)) # Approx approach to keep it stable
-            # Better approximation using Pole method for stability in Py:
-            guess = math.atan2(math.sin(r + ad) * math.tan(eps), math.cos(r + ad)) # Not fully correct for iteration
-            # Let's fallback to the High Precision Pole Method which works best for non-library usage
-            return 0 
-
-    # STABIL HASSAS KUTUP YÖNTEMİ (High Precision Pole Method)
-    # Bu yöntem Placidus eğrilerine iterasyondan daha stabil ve çok çok yakın sonuç verir.
+    # Pole Method (Placidus Approximation)
     def cusp_pole(offset_deg, factor):
-        # Calculate pole height
-        pole = math.atan(math.tan(lat_rad) * factor)
-        r = ramc + math.radians(offset_deg)
-        
-        # Standard Formula
-        top = math.cos(r)
-        bot = -(math.sin(r) * math.cos(eps) + math.tan(pole) * math.sin(eps))
-        res = math.degrees(math.atan2(top, bot))
-        return normalize(res)
+        pole_rad = math.atan(math.tan(lat_rad) * factor)
+        ramc_off = ramc + math.radians(offset_deg)
+        top = math.cos(ramc_off)
+        bot = -(math.sin(ramc_off)*math.cos(eps) + math.tan(pole_rad)*math.sin(eps))
+        res = math.atan2(top, bot)
+        return normalize(math.degrees(res))
 
     cusps = {1: asc_deg, 4: ic_deg, 7: dsc_deg, 10: mc_deg}
-    
-    # 11, 12 (MC tarafı)
-    cusps[11] = cusp_pole(30, 1/3)  # Pole factor ~0.33
-    cusps[12] = cusp_pole(60, 2/3)  # Pole factor ~0.66
-    
-    # 2, 3 (IC tarafı)
+    cusps[11] = cusp_pole(30, 1/3)
+    cusps[12] = cusp_pole(60, 2/3)
     cusps[2] = cusp_pole(120, 2/3)
     cusps[3] = cusp_pole(150, 1/3)
     
-    # Karşıtlar
     cusps[5] = normalize(cusps[11] + 180)
     cusps[6] = normalize(cusps[12] + 180)
     cusps[8] = normalize(cusps[2] + 180)
@@ -196,8 +163,9 @@ def calculate_transits(birth_bodies, start_dt, end_dt, lat, lon):
     report, display = [], []
     
     for n, b in planets:
-        obs.date = start_dt; obs.epoch = start_dt; b.compute(obs); d1 = math.degrees(ephem.Ecliptic(b).lon)
-        obs.date = end_dt; obs.epoch = end_dt; b.compute(obs); d2 = math.degrees(ephem.Ecliptic(b).lon)
+        # Epoch of Date for Transits
+        obs.date = start_dt; obs.epoch = obs.date; b.compute(obs); d1 = math.degrees(ephem.Ecliptic(b).lon)
+        obs.date = end_dt; obs.epoch = obs.date; b.compute(obs); d2 = math.degrees(ephem.Ecliptic(b).lon)
         s1 = ZODIAC[int(d1/30)%12]
         s2 = ZODIAC[int(d2/30)%12]
         
@@ -221,7 +189,7 @@ def draw_chart_visual(bodies_data, cusps):
     
     asc_deg = cusps[1]
     ax.set_theta_offset(np.pi - math.radians(asc_deg))
-    ax.set_theta_direction(1) # CCW
+    ax.set_theta_direction(1)
     ax.grid(False); ax.set_yticklabels([]); ax.set_xticklabels([])
 
     for i in range(1, 13):
@@ -255,12 +223,12 @@ def calculate_all(name, d_date, d_time, lat, lon, utc_offset, transit_enabled, s
         local_dt = datetime.combine(d_date, d_time)
         utc_dt = local_dt - timedelta(hours=utc_offset)
         
-        # HASSAS PLACIDUS HESABI (True Epoch)
+        # 1. HESAPLA (True Epoch)
         cusps = calculate_placidus_cusps_precise(utc_dt, lat, lon)
         
         obs = ephem.Observer()
         obs.date = utc_dt
-        obs.epoch = utc_dt # Planetler için True Epoch
+        obs.epoch = obs.date # DÜZELTME BURADA
         obs.lat, obs.lon = str(lat), str(lon)
         
         bodies = [('Güneş', ephem.Sun()), ('Ay', ephem.Moon()), ('Merkür', ephem.Mercury()), ('Venüs', ephem.Venus()), ('Mars', ephem.Mars()), ('Jüpiter', ephem.Jupiter()), ('Satürn', ephem.Saturn()), ('Uranüs', ephem.Uranus()), ('Neptün', ephem.Neptune()), ('Plüton', ephem.Pluto())]
