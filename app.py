@@ -77,37 +77,45 @@ def clean_text_for_pdf(text):
     for k, v in replacements.items(): text = text.replace(k, v)
     return text.encode('latin-1', 'ignore').decode('latin-1')
 
-# --- TEMEL FONKSİYONLAR ---
+# --- MATEMATİK MOTORU ---
 def normalize(deg):
     return deg % 360
+
+# DÜZELTME: Kütüphane yerine Manuel Obliquity Hesabı (Meeus)
+# Bu fonksiyon hatayı kökten çözer.
+def get_true_obliquity(jd):
+    T = (jd - 2451545.0) / 36525.0
+    # Mean Obliquity Formula (Laskar)
+    mean_obl = 23.43929111 - (46.8150 * T + 0.00059 * T**2 - 0.001813 * T**3) / 3600.0
+    return math.radians(mean_obl)
 
 def calculate_placidus_cusps_precise(utc_dt, lat, lon):
     obs = ephem.Observer()
     obs.date = utc_dt
-    obs.epoch = obs.date # Epoch fix
+    obs.epoch = obs.date # Precession (Yalpalanma) için şart
     obs.lat, obs.lon = str(lat), str(lon)
     
+    # Yıldız Zamanı
     ramc = float(obs.sidereal_time())
     
-    # DÜZELTME BURADA: obs yerine obs.date gönderiyoruz
-    ecl = ephem.Ecliptic(obs.date) 
-    eps = float(ecl.obliquity) 
+    # DÜZELTME: Hata veren 'ephem.Ecliptic' yerine manuel hesap
+    jd = ephem.julian_date(utc_dt)
+    eps = get_true_obliquity(jd) # Radyan döner
     
     lat_rad = math.radians(lat)
     
-    # MC
+    # Köşe Evler (MC & ASC)
     mc_rad = math.atan2(math.tan(ramc), math.cos(eps))
     mc_deg = normalize(math.degrees(mc_rad))
     if not (0 <= abs(mc_deg - math.degrees(ramc)) <= 90 or 0 <= abs(mc_deg - math.degrees(ramc) - 360) <= 90):
         mc_deg = normalize(mc_deg + 180)
     ic_deg = normalize(mc_deg + 180)
     
-    # ASC
     asc_rad = math.atan2(math.cos(ramc), -(math.sin(ramc)*math.cos(eps) + math.tan(lat_rad)*math.sin(eps)))
     asc_deg = normalize(math.degrees(asc_rad))
     dsc_deg = normalize(asc_deg + 180)
 
-    # Placidus Pole Method
+    # Placidus Pole Method (Stable & Unequal)
     def cusp_pole(offset_deg, factor):
         pole_rad = math.atan(math.tan(lat_rad) * factor)
         ramc_off = ramc + math.radians(offset_deg)
@@ -189,7 +197,7 @@ def draw_chart_visual(bodies_data, cusps):
     
     asc_deg = cusps[1]
     ax.set_theta_offset(np.pi - math.radians(asc_deg))
-    ax.set_theta_direction(1)
+    ax.set_theta_direction(1) # CCW
     ax.grid(False); ax.set_yticklabels([]); ax.set_xticklabels([])
 
     for i in range(1, 13):
@@ -223,7 +231,7 @@ def calculate_all(name, d_date, d_time, lat, lon, utc_offset, transit_enabled, s
         local_dt = datetime.combine(d_date, d_time)
         utc_dt = local_dt - timedelta(hours=utc_offset)
         
-        # 1. HESAPLA
+        # 1. HESAPLA (True Epoch Fix)
         cusps = calculate_placidus_cusps_precise(utc_dt, lat, lon)
         
         obs = ephem.Observer()
@@ -290,13 +298,13 @@ def get_ai(prompt):
     except Exception as e: return str(e)
 
 # --- ARAYÜZ ---
-st.title("🌌 Astro-Analiz Pro (Final v3)")
+st.title("🌌 Astro-Analiz Pro (Stable)")
 with st.sidebar:
     st.header("Giriş")
     name = st.text_input("İsim", "Ziyaretçi")
     d_date = st.date_input("Tarih", value=datetime(1980, 11, 26))
     
-    # --- STEP=60 KORUNDU ---
+    # STEP=60 KORUNDU
     d_time = st.time_input("Saat", value=datetime.strptime("16:00", "%H:%M"), step=60)
     
     st.caption("Saat Dilimi (GMT)")
