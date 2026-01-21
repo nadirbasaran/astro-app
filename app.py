@@ -1,35 +1,40 @@
 import streamlit as st
 import google.generativeai as genai
-from datetime import datetime
-import math
 import ephem
-import os
+import math
+from datetime import datetime
 
 # --- SAYFA AYARLARI ---
 st.set_page_config(page_title="Astro-Analiz Pro", layout="wide", page_icon="🔮")
 
-# --- API ANAHTARI (GÜVENLİ YÖNTEM) ---
-# Streamlit Cloud'da "Secrets" kısmından çekecek
-try:
+# --- API ANAHTARI KONTROLÜ ---
+if "GOOGLE_API_KEY" in st.secrets:
     api_key = st.secrets["GOOGLE_API_KEY"]
     genai.configure(api_key=api_key)
-except:
-    st.error("API Anahtarı bulunamadı! Lütfen Streamlit Secrets ayarlarını yapın.")
+else:
+    st.error("🚨 API Anahtarı Bulunamadı! Lütfen Streamlit ayarlarından 'Secrets' kısmını kontrol edin.")
     st.stop()
 
-# --- MODEL SEÇİCİ ---
+# --- MODEL FONKSİYONU (HATA GÖSTEREN) ---
 def get_ai_response(prompt):
-    models = ['models/gemini-1.5-flash', 'models/gemini-1.5-pro', 'models/gemini-1.0-pro']
+    # Denenecek modeller
+    models = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-1.0-pro']
+    
+    error_log = ""
     for m in models:
         try:
             model = genai.GenerativeModel(m)
             response = model.generate_content(prompt)
             return response.text
-        except:
+        except Exception as e:
+            # Hatayı kaydet ama devam et
+            error_log += f"\n❌ {m} Modeli Hatası: {str(e)}\n"
             continue
-    return "Üzgünüm, şu an AI servislerine ulaşılamıyor."
+            
+    # Eğer hepsi başarısız olursa hatayı göster
+    return f"⚠️ **AI BAĞLANTI HATASI** ⚠️\n\nLütfen bu hatayı kopyalayıp asistana gönder:\n```text{error_log}```"
 
-# --- HESAPLAMA (NASA/EPHEM) ---
+# --- HESAPLAMA (EPHEM) ---
 ZODIAC = ["Koç", "Boğa", "İkizler", "Yengeç", "Aslan", "Başak", "Terazi", "Akrep", "Yay", "Oğlak", "Kova", "Balık"]
 
 def calculate_chart(name, d_date, d_time, lat, lon):
@@ -57,7 +62,6 @@ def calculate_chart(name, d_date, d_time, lat, lon):
 
 # --- ARAYÜZ ---
 st.title("🔮 Astro-Analiz (AI Destekli)")
-st.markdown("NASA verileriyle hesaplar, Google Gemini AI ile yorumlar.")
 
 with st.sidebar:
     st.header("Giriş Paneli")
@@ -80,7 +84,7 @@ if btn:
     with c2:
         st.success("Yorum")
         if data:
-            with st.spinner("Yıldızlar okunuyor..."):
+            with st.spinner("AI Yanıtlıyor..."):
                 prompt = f"Sen astrologsun. Kişi: {name}, {city}. Soru: {q}. Veriler: {data}"
                 res = get_ai_response(prompt)
                 st.markdown(res)
