@@ -14,34 +14,44 @@ from fpdf import FPDF
 # --- SAYFA AYARLARI ---
 st.set_page_config(page_title="Astro-Analiz Pro", layout="wide", page_icon="🔮")
 
+# --------------------------------------------------------------------------
+# 🔒 GÜVENLİK DUVARI
+# --------------------------------------------------------------------------
+def check_password():
+    if "password_correct" not in st.session_state:
+        st.session_state["password_correct"] = False
+
+    def password_entered():
+        if st.session_state["password"] == st.secrets["APP_PASSWORD"]:
+            st.session_state["password_correct"] = True
+            del st.session_state["password"]
+        else:
+            st.session_state["password_correct"] = False
+
+    if st.session_state["password_correct"]:
+        return True
+
+    st.markdown("""<style>.stTextInput > label { display:none; }</style>""", unsafe_allow_html=True)
+    col1, col2, col3 = st.columns([1,2,1])
+    with col2:
+        st.warning("🔒 Erişim İzni Gerekiyor")
+        st.text_input("Şifre", type="password", on_change=password_entered, key="password")
+    return False
+
+if not check_password():
+    st.stop()
+
 # --- CSS ---
 st.markdown("""
     <style>
     .stApp { background: linear-gradient(to bottom, #0e1117, #24283b); color: #e0e0e0; }
-    h1, h2, h3 { color: #FFD700 !important; font-family: 'Helvetica', sans-serif; text-shadow: 2px 2px 4px #000000; }
-    .stButton>button { background-color: #FFD700; color: #000; border-radius: 20px; border: none; font-weight: bold; width: 100%; }
+    h1, h2, h3 { color: #FFD700 !important; font-family: 'Helvetica', sans-serif; }
+    .stButton>button { background-color: #FFD700; color: #000; border-radius: 20px; font-weight: bold; width: 100%; }
     [data-testid="stSidebar"] { background-color: #161a25; border-right: 1px solid #FFD700; }
-    
-    .metric-box { 
-        background-color: #1e2130; 
-        padding: 10px; 
-        border-radius: 8px; 
-        border-left: 4px solid #FFD700; 
-        margin-bottom: 8px; 
-        font-size: 14px;
-        color: white;
-    }
+    .metric-box { background-color: #1e2130; padding: 10px; border-radius: 8px; border-left: 4px solid #FFD700; margin-bottom: 8px; font-size: 14px; color: white; }
     .metric-box b { color: #FFD700; }
-    .aspect-box {
-        background-color: #25293c; 
-        padding: 5px 10px; margin: 2px; 
-        border-radius: 4px; font-size: 13px; border: 1px solid #444;
-    }
-    .transit-box {
-        background-color: #2d1b2e;
-        border-left: 4px solid #ff4b4b;
-        padding: 8px; margin-bottom: 5px; font-size: 13px;
-    }
+    .aspect-box { background-color: #25293c; padding: 5px; margin: 2px; border-radius: 4px; font-size: 13px; border: 1px solid #444; }
+    .transit-box { background-color: #2d1b2e; border-left: 4px solid #ff4b4b; padding: 8px; margin-bottom: 5px; font-size: 13px; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -63,7 +73,7 @@ def dec_to_dms(deg):
     return f"{d:02d}° {m:02d}'"
 
 def clean_text_for_pdf(text):
-    replacements = {'ğ':'g', 'Ğ':'G', 'ş':'s', 'Ş':'S', 'ı':'i', 'İ':'I', 'ü':'u', 'Ü':'U', 'ö':'o', 'Ö':'O', 'ç':'c', 'Ç':'C', '–':'-', '’':"'", '“':'"', '”':'"', '…':'...', '♈':'Koc', '♉':'Boga', '♊':'Ikizler', '♋':'Yengec', '♌':'Aslan', '♍':'Basak', '♎':'Terazi', '♏':'Akrep', '♐':'Yay', '♑':'Oglak', '♒':'Kova', '♓':'Balik', '☉':'', '☽':'', '☿':'', '♀':'', '♂':'', '♃':'', '♄':'', '♅':'', '♆':'', '♇':''}
+    replacements = {'ğ':'g', 'Ğ':'G', 'ş':'s', 'Ş':'S', 'ı':'i', 'İ':'I', 'ü':'u', 'Ü':'U', 'ö':'o', 'Ö':'O', 'ç':'c', 'Ç':'C', '–':'-', '’':"'", '“':'"', '”':'"'}
     for k, v in replacements.items(): text = text.replace(k, v)
     return text.encode('latin-1', 'ignore').decode('latin-1')
 
@@ -74,22 +84,25 @@ def normalize(deg):
 def calculate_placidus_cusps_precise(utc_dt, lat, lon):
     obs = ephem.Observer()
     obs.date = utc_dt
-    # DÜZELTME: Epoch'u doğrudan date objesinden alıyoruz (datetime objesi verince hata veriyordu)
-    obs.epoch = obs.date 
+    obs.epoch = obs.date # Epoch fix
     obs.lat, obs.lon = str(lat), str(lon)
     
     ramc = float(obs.sidereal_time())
-    ecl = ephem.Ecliptic(obs)
-    eps = float(ecl.obliquity) # Gerçek Eğiklik
+    
+    # DÜZELTME BURADA: obs yerine obs.date gönderiyoruz
+    ecl = ephem.Ecliptic(obs.date) 
+    eps = float(ecl.obliquity) 
+    
     lat_rad = math.radians(lat)
     
-    # Köşe Evler
+    # MC
     mc_rad = math.atan2(math.tan(ramc), math.cos(eps))
     mc_deg = normalize(math.degrees(mc_rad))
     if not (0 <= abs(mc_deg - math.degrees(ramc)) <= 90 or 0 <= abs(mc_deg - math.degrees(ramc) - 360) <= 90):
         mc_deg = normalize(mc_deg + 180)
     ic_deg = normalize(mc_deg + 180)
     
+    # ASC
     asc_rad = math.atan2(math.cos(ramc), -(math.sin(ramc)*math.cos(eps) + math.tan(lat_rad)*math.sin(eps)))
     asc_deg = normalize(math.degrees(asc_rad))
     dsc_deg = normalize(asc_deg + 180)
@@ -150,7 +163,7 @@ def calculate_transits(birth_bodies, start_dt, end_dt, lat, lon):
     report, display = [], []
     
     for n, b in planets:
-        # Epoch hatasını önlemek için obs.date kullanıyoruz
+        # Epoch fix for transits
         obs.date = start_dt; obs.epoch = obs.date; b.compute(obs); d1 = math.degrees(ephem.Ecliptic(b).lon)
         obs.date = end_dt; obs.epoch = obs.date; b.compute(obs); d2 = math.degrees(ephem.Ecliptic(b).lon)
         s1 = ZODIAC[int(d1/30)%12]
@@ -176,7 +189,7 @@ def draw_chart_visual(bodies_data, cusps):
     
     asc_deg = cusps[1]
     ax.set_theta_offset(np.pi - math.radians(asc_deg))
-    ax.set_theta_direction(1) # CCW
+    ax.set_theta_direction(1)
     ax.grid(False); ax.set_yticklabels([]); ax.set_xticklabels([])
 
     for i in range(1, 13):
@@ -210,12 +223,12 @@ def calculate_all(name, d_date, d_time, lat, lon, utc_offset, transit_enabled, s
         local_dt = datetime.combine(d_date, d_time)
         utc_dt = local_dt - timedelta(hours=utc_offset)
         
-        # 1. HESAPLA (True Epoch Fix)
+        # 1. HESAPLA
         cusps = calculate_placidus_cusps_precise(utc_dt, lat, lon)
         
         obs = ephem.Observer()
         obs.date = utc_dt
-        obs.epoch = obs.date # DÜZELTME: Epoch'u string/float olarak al
+        obs.epoch = obs.date # Epoch fix
         obs.lat, obs.lon = str(lat), str(lon)
         
         bodies = [('Güneş', ephem.Sun()), ('Ay', ephem.Moon()), ('Merkür', ephem.Mercury()), ('Venüs', ephem.Venus()), ('Mars', ephem.Mars()), ('Jüpiter', ephem.Jupiter()), ('Satürn', ephem.Saturn()), ('Uranüs', ephem.Uranus()), ('Neptün', ephem.Neptune()), ('Plüton', ephem.Pluto())]
@@ -277,13 +290,13 @@ def get_ai(prompt):
     except Exception as e: return str(e)
 
 # --- ARAYÜZ ---
-st.title("🌌 Astro-Analiz Pro (Final v2)")
+st.title("🌌 Astro-Analiz Pro (Final v3)")
 with st.sidebar:
     st.header("Giriş")
     name = st.text_input("İsim", "Ziyaretçi")
     d_date = st.date_input("Tarih", value=datetime(1980, 11, 26))
     
-    # --- DÜZELTME BURADA: step=60 ---
+    # --- STEP=60 KORUNDU ---
     d_time = st.time_input("Saat", value=datetime.strptime("16:00", "%H:%M"), step=60)
     
     st.caption("Saat Dilimi (GMT)")
