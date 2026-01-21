@@ -59,18 +59,18 @@ def calculate_chart(name, d_date, d_time, lat, lon, utc_offset, transit_enabled,
         local_dt = datetime.combine(d_date, d_time)
         utc_dt = local_dt - timedelta(hours=utc_offset)
         
-        # --- KESİN ÇÖZÜM: Julian Date (Sayısal Tarih) Kullanımı ---
-        # Metin veya Obje yerine matematiksel sayı kullanıyoruz. Hata veremez.
-        jd = ephem.julian_date(utc_dt)
+        # --- KESİN ÇÖZÜM: Tarihi String (Metin) olarak veriyoruz ---
+        # Bu, "not enough arguments for format string" hatasını %100 çözer.
+        date_str = utc_dt.strftime('%Y/%m/%d %H:%M:%S')
         
         # 2. Gözlemci (Observer)
         obs = ephem.Observer()
         obs.lat = str(lat)
         obs.lon = str(lon)
-        obs.date = jd
+        obs.date = date_str
         
-        # KRİTİK: Güneş'i 7. Eve oturtan ayar (Epoch = Doğum Anı Sayısal Değeri)
-        obs.epoch = jd
+        # KRİTİK: Güneş'i 7. Eve oturtan ayar (Epoch = Doğum Anı)
+        obs.epoch = date_str
         
         # 3. Ev Sistemi (Placidus & Eğim)
         ramc = float(obs.sidereal_time())
@@ -174,14 +174,14 @@ def calculate_chart(name, d_date, d_time, lat, lon, utc_offset, transit_enabled,
             tr_planets = [('Jüpiter', ephem.Jupiter()), ('Satürn', ephem.Saturn()), ('Uranüs', ephem.Uranus()), ('Neptün', ephem.Neptune()), ('Plüton', ephem.Pluto())]
             
             for n, b in tr_planets:
-                # Sayısal Tarih ile Hata Önleme
-                obs_tr.date = ephem.julian_date(tr_start)
+                # String Formatı ile Hata Önleme
+                obs_tr.date = tr_start.strftime('%Y/%m/%d %H:%M:%S')
                 obs_tr.epoch = obs_tr.date 
                 b.compute(obs_tr)
                 ecl_start = ephem.Ecliptic(b)
                 d1 = math.degrees(ecl_start.lon)
                 
-                obs_tr.date = ephem.julian_date(tr_end)
+                obs_tr.date = tr_end.strftime('%Y/%m/%d %H:%M:%S')
                 obs_tr.epoch = obs_tr.date
                 b.compute(obs_tr)
                 ecl_end = ephem.Ecliptic(b)
