@@ -1,6 +1,6 @@
 import streamlit as st
 import matplotlib
-matplotlib.use('Agg') # Siyah ekran hatasını önler
+matplotlib.use('Agg') # Grafik hatasını önler (Siyah ekran çözümü)
 import matplotlib.pyplot as plt
 import ephem
 import math
@@ -14,21 +14,19 @@ from fpdf import FPDF
 # --- SAYFA AYARLARI ---
 st.set_page_config(page_title="Astro-Analiz Pro", layout="wide", page_icon="🔮")
 
-# --- CSS STİLLERİ ---
+# --- CSS ---
 st.markdown("""
     <style>
     .stApp { background: linear-gradient(to bottom, #0e1117, #24283b); color: #e0e0e0; }
     h1, h2, h3 { color: #FFD700 !important; font-family: 'Helvetica', sans-serif; }
     .stButton>button { background-color: #FFD700; color: #000; border-radius: 20px; font-weight: bold; width: 100%; }
-    [data-testid="stSidebar"] { background-color: #161a25; border-right: 1px solid #FFD700; }
     .metric-box { background-color: #1e2130; padding: 10px; border-radius: 8px; border-left: 4px solid #FFD700; margin-bottom: 8px; font-size: 14px; color: white; }
-    .metric-box b { color: #FFD700; }
     .aspect-box { background-color: #25293c; padding: 5px; margin: 2px; border-radius: 4px; font-size: 13px; border: 1px solid #444; }
     .transit-box { background-color: #2d1b2e; border-left: 4px solid #ff4b4b; padding: 8px; margin-bottom: 5px; font-size: 13px; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- API KONTROLÜ ---
+# --- API ---
 if "GOOGLE_API_KEY" in st.secrets:
     api_key = st.secrets["GOOGLE_API_KEY"]
 else:
@@ -45,48 +43,42 @@ def dec_to_dms(deg):
     m = int(round((deg - d) * 60))
     return f"{d:02d}° {m:02d}'"
 
-# --- PDF İÇİN TÜRKÇE KARAKTER DÜZELTİCİ (ÇÖKMEYİ ÖNLER) ---
 def clean_text_for_pdf(text):
-    # Türkçe karakterleri İngilizce karşılıklarına çevir
-    replacements = {
-        'ğ': 'g', 'Ğ': 'G', 'ş': 's', 'Ş': 'S', 'ı': 'i', 'İ': 'I', 
-        'ü': 'u', 'Ü': 'U', 'ö': 'o', 'Ö': 'O', 'ç': 'c', 'Ç': 'C',
-        '–': '-', '’': "'", '“': '"', '”': '"', '…': '...'
-    }
-    for k, v in replacements.items():
-        text = text.replace(k, v)
-    
-    # Tanınmayan diğer karakterleri (emojiler vs.) temizle
+    # Türkçe karakterleri İngilizceye çevir (PDF çökmesini önler)
+    replacements = {'ğ':'g', 'Ğ':'G', 'ş':'s', 'Ş':'S', 'ı':'i', 'İ':'I', 'ü':'u', 'Ü':'U', 'ö':'o', 'Ö':'O', 'ç':'c', 'Ç':'C', '–':'-', '’':"'", '“':'"', '”':'"', '…':'...'}
+    for k, v in replacements.items(): text = text.replace(k, v)
     return text.encode('latin-1', 'replace').decode('latin-1')
 
-# --- ASTROLOJİK HESAPLAMALAR ---
+# --- ASTROLOJİ HESAPLAMALARI ---
 def normalize(deg):
     return deg % 360
 
 def calculate_chart(name, d_date, d_time, lat, lon, utc_offset, transit_enabled, start_date, end_date):
     try:
-        # Tarih ve Saat Birleştirme
+        # 1. Tarih Ayarı
         local_dt = datetime.combine(d_date, d_time)
         utc_dt = local_dt - timedelta(hours=utc_offset)
         
-        # PyEphem Gözlemci Ayarları
+        # 2. Gözlemci (Observer)
         obs = ephem.Observer()
         obs.lat = str(lat)
         obs.lon = str(lon)
-        obs.date = utc_dt
         
-        # --- KRİTİK AYAR: EPOCH OF DATE (Precession Düzeltmesi) ---
-        # Bu ayar, gezegen konumlarını 1980 yılına göre hesaplar (J2000 değil).
-        # Güneş'in ev kaymasını düzelten satır budur.
-        obs.epoch = utc_dt 
+        # HATA DÜZELTME: Tarihi String (Metin) olarak veriyoruz.
+        # Bu, "format string" hatasını kesin olarak engeller.
+        date_str = utc_dt.strftime('%Y/%m/%d %H:%M:%S')
+        obs.date = date_str
         
-        # Placidus Ev Sistemi Hesaplama (Manual)
+        # KRİTİK: Güneş'i 7. Eve oturtan ayar (Epoch = Doğum Tarihi)
+        obs.epoch = date_str
+        
+        # 3. Ev Sistemi (Placidus & Eğim)
         ramc = float(obs.sidereal_time())
-        ecl = ephem.Ecliptic(obs) # Obs üzerinden Ecliptic objesi yaratmak en güvenlisi
+        ecl = ephem.Ecliptic(obs)
         eps = float(ecl.obliquity)
         lat_rad = math.radians(lat)
         
-        # Köşe Noktaları (MC & ASC)
+        # Köşe Evler
         mc_rad = math.atan2(math.tan(ramc), math.cos(eps))
         mc_deg = normalize(math.degrees(mc_rad))
         if not (0 <= abs(mc_deg - math.degrees(ramc)) <= 90 or 0 <= abs(mc_deg - math.degrees(ramc) - 360) <= 90):
@@ -97,7 +89,7 @@ def calculate_chart(name, d_date, d_time, lat, lon, utc_offset, transit_enabled,
         asc_deg = normalize(math.degrees(asc_rad))
         dsc_deg = normalize(asc_deg + 180)
 
-        # Ara Evler (Placidus Yaklaşımı)
+        # Ara Evler (Placidus Yaklaşımı - Unequal)
         def cusp_pole(offset_deg, factor):
             pole_rad = math.atan(math.tan(lat_rad) * factor)
             ramc_off = ramc + math.radians(offset_deg)
@@ -112,11 +104,11 @@ def calculate_chart(name, d_date, d_time, lat, lon, utc_offset, transit_enabled,
         cusps[5] = normalize(cusps[11] + 180); cusps[6] = normalize(cusps[12] + 180)
         cusps[8] = normalize(cusps[2] + 180); cusps[9] = normalize(cusps[3] + 180)
 
-        # Gezegen Konumları
+        # 4. Gezegenler
         bodies = [('Güneş', ephem.Sun()), ('Ay', ephem.Moon()), ('Merkür', ephem.Mercury()), ('Venüs', ephem.Venus()), ('Mars', ephem.Mars()), ('Jüpiter', ephem.Jupiter()), ('Satürn', ephem.Saturn()), ('Uranüs', ephem.Uranus()), ('Neptün', ephem.Neptune()), ('Plüton', ephem.Pluto())]
         
         info_html = f"<div class='metric-box'>🌍 <b>Doğum (UTC):</b> {utc_dt.strftime('%H:%M')} (GMT+{utc_offset})</div>"
-        ai_data = "DOĞUM HARİTASI VERİLERİ (Precession Corrected):\n"
+        ai_data = "SİSTEM: PLACIDUS (Doğum Ekinoksu)\n"
         
         asc_sign = ZODIAC[int(cusps[1]/30)%12]
         mc_sign = ZODIAC[int(cusps[10]/30)%12]
@@ -126,22 +118,22 @@ def calculate_chart(name, d_date, d_time, lat, lon, utc_offset, transit_enabled,
         info_html += f"<div class='metric-box'>👑 <b>MC:</b> {mc_sign} {dec_to_dms(cusps[10]%30)}</div><br>"
         ai_data += f"YÜKSELEN: {asc_sign} {dec_to_dms(cusps[1]%30)}\nMC: {mc_sign}\n"
 
-        # Hangi gezegen hangi evde?
+        # Ev Bulucu
         def get_house(deg, cusps_dict):
             for i in range(1, 13):
                 start = cusps_dict[i]
                 end = cusps_dict[i+1] if i < 12 else cusps_dict[1]
                 if start < end:
                     if start <= deg < end: return i
-                else: # Sınır geçişi (359 -> 0)
+                else:
                     if start <= deg or deg < end: return i
             return 1
 
         for n, b in bodies:
             b.compute(obs)
-            # Ecliptic Boylamı Hesapla
-            lon_rad = ephem.Ecliptic(b).lon
-            deg = math.degrees(lon_rad)
+            # HATA DÜZELTME: 'ecl_lon' hatasını düzelten standart kod
+            ecl_obj = ephem.Ecliptic(b)
+            deg = math.degrees(ecl_obj.lon)
             
             sign_idx = int(deg/30)%12
             h = get_house(deg, cusps)
@@ -177,24 +169,30 @@ def calculate_chart(name, d_date, d_time, lat, lon, utc_offset, transit_enabled,
             
             obs_tr = ephem.Observer()
             obs_tr.lat, obs_tr.lon = str(lat), str(lon)
-            tr_report = []
-            tr_display = []
+            tr_report, tr_display = [], []
             
             tr_planets = [('Jüpiter', ephem.Jupiter()), ('Satürn', ephem.Saturn()), ('Uranüs', ephem.Uranus()), ('Neptün', ephem.Neptune()), ('Plüton', ephem.Pluto())]
             
             for n, b in tr_planets:
-                obs_tr.date = tr_start; obs_tr.epoch = tr_start; b.compute(obs_tr)
-                d1 = math.degrees(ephem.Ecliptic(b).lon)
-                obs_tr.date = tr_end; obs_tr.epoch = tr_end; b.compute(obs_tr)
-                d2 = math.degrees(ephem.Ecliptic(b).lon)
+                # String Formatı ile Hata Önleme
+                obs_tr.date = tr_start.strftime('%Y/%m/%d %H:%M:%S')
+                obs_tr.epoch = obs_tr.date 
+                b.compute(obs_tr)
+                ecl_b = ephem.Ecliptic(b)
+                d1 = math.degrees(ecl_b.lon)
+                
+                obs_tr.date = tr_end.strftime('%Y/%m/%d %H:%M:%S')
+                obs_tr.epoch = obs_tr.date
+                b.compute(obs_tr)
+                ecl_b = ephem.Ecliptic(b)
+                d2 = math.degrees(ecl_b.lon)
                 
                 s1 = ZODIAC[int(d1/30)%12]
                 s2 = ZODIAC[int(d2/30)%12]
                 tr_display.append(f"<b>{n}:</b> {s1} -> {s2}")
                 tr_report.append(f"Transit {n}: {s1} -> {s2}")
                 
-                # Natal Kontak
-                for natal_n, _, natal_deg, _ in visual_data[2:]: # ASC/MC hariç
+                for natal_n, _, natal_deg, _ in visual_data[2:]:
                     if abs(d1 - natal_deg) < 4 or abs(d2 - natal_deg) < 4:
                         tr_display.append(f"⚠️ {n} -> {natal_n}")
                         tr_report.append(f"{n} transit, {natal_n} ile temas.")
@@ -204,8 +202,7 @@ def calculate_chart(name, d_date, d_time, lat, lon, utc_offset, transit_enabled,
 
         return info_html, ai_data, visual_data, cusps, aspects, transit_html, None
 
-    except Exception as e:
-        return None, None, None, None, None, None, str(e)
+    except Exception as e: return None, None, None, None, None, None, str(e)
 
 # --- HARİTA GÖRSELİ ---
 def draw_chart_visual(bodies_data, cusps):
@@ -213,24 +210,18 @@ def draw_chart_visual(bodies_data, cusps):
     ax = fig.add_subplot(111, projection='polar')
     ax.set_facecolor('#1a1c24')
     
-    # ASC'yi Sola (Saat 9 yönü) Al
     asc_rad = math.radians(cusps[1])
     ax.set_theta_offset(np.pi - asc_rad)
-    ax.set_theta_direction(1) # Saat yönünün tersi
+    ax.set_theta_direction(1) 
     ax.grid(False); ax.set_yticklabels([]); ax.set_xticklabels([])
 
-    # Ev Çizgileri
     for i in range(1, 13):
         rad = math.radians(cusps[i])
         ax.plot([rad, rad], [0, 1.2], color='#444', linewidth=1, linestyle='--')
-        
-        # Ev Numaraları
         next_c = cusps[i+1] if i < 12 else cusps[1]
-        diff = (next_c - cusps[i]) % 360
-        mid = math.radians(cusps[i] + diff/2)
+        mid = math.radians(cusps[i] + (next_c - cusps[i]) % 360 / 2)
         ax.text(mid, 0.4, str(i), color='#888', ha='center', fontweight='bold')
 
-    # Zodyak Çemberi
     ax.plot(np.linspace(0, 2*np.pi, 100), [1.2]*100, color='#FFD700', linewidth=2)
     for i in range(12):
         deg = i * 30 + 15
@@ -240,67 +231,62 @@ def draw_chart_visual(bodies_data, cusps):
         sep = math.radians(i*30)
         ax.plot([sep, sep], [1.15, 1.25], color='#FFD700')
 
-    # Gezegenler
     for name, sign, deg, sym in bodies_data:
         rad = math.radians(deg)
         color = '#FF4B4B' if name in ['ASC', 'MC'] else 'white'
-        ax.plot(rad, 1.05, 'o', color=color, markersize=12, markeredgecolor='#FFD700')
+        ax.plot(rad, 1.05, 'o', color=color, markersize=10, markeredgecolor='#FFD700')
         ax.text(rad, 1.17, sym, color=color, fontsize=12, ha='center')
-    
     return fig
 
-# --- PDF OLUŞTURMA ---
+# --- PDF ---
 def create_pdf(name, info, ai_text):
     try:
         pdf = FPDF()
         pdf.add_page()
-        # Unicode font sorunu için Türkçe karakterleri temizle
         safe_name = clean_text_for_pdf(name)
         safe_info = clean_text_for_pdf(info)
         safe_ai = clean_text_for_pdf(ai_text)
         
-        pdf.set_font("Arial", 'B', 16)
-        pdf.cell(0, 10, f"ANALIZ: {safe_name}", ln=True, align='C')
-        
-        pdf.set_font("Arial", '', 12)
-        pdf.cell(0, 10, safe_info, ln=True, align='C')
+        pdf.set_font("Arial", 'B', 16); pdf.cell(0, 10, f"ANALIZ: {safe_name}", ln=True, align='C')
+        pdf.set_font("Arial", '', 12); pdf.cell(0, 10, safe_info, ln=True, align='C')
         pdf.ln(5)
-        
-        pdf.set_font("Arial", 'B', 14)
-        pdf.cell(0, 10, "YORUM", ln=True)
-        
-        pdf.set_font("Arial", '', 11)
-        pdf.multi_cell(0, 8, safe_ai)
-        
+        pdf.set_font("Arial", 'B', 14); pdf.cell(0, 10, "YORUM", ln=True)
+        pdf.set_font("Arial", '', 11); pdf.multi_cell(0, 8, safe_ai)
         return pdf.output(dest='S').encode('latin-1', 'ignore')
-    except Exception as e:
-        return None
+    except: return None
 
-# --- AI ENTEGRASYONU ---
 def get_ai(prompt):
+    if not api_key: return "API Key Eksik."
     try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
         resp = requests.post(url, headers={'Content-Type': 'application/json'}, data=json.dumps({"contents": [{"parts": [{"text": prompt}]}]}))
-        if resp.status_code == 200:
-            return resp.json()['candidates'][0]['content']['parts'][0]['text']
-        else: return "AI Hatası: Bağlantı kurulamadı."
+        return resp.json()['candidates'][0]['content']['parts'][0]['text'] if resp.status_code==200 else "AI Hatası"
     except Exception as e: return str(e)
 
-# --- ANA ARAYÜZ ---
-st.title("🌌 Astro-Analiz Pro (Final Sürüm)")
+# --- ARAYÜZ ---
+st.title("🌌 Astro-Analiz Pro (Final)")
+# GÜVENLİK
+def check_password():
+    if "password_correct" not in st.session_state: st.session_state["password_correct"] = False
+    def password_entered():
+        if st.session_state["password"] == st.secrets["APP_PASSWORD"]: st.session_state["password_correct"] = True
+        else: st.session_state["password_correct"] = False
+    if st.session_state["password_correct"]: return True
+    st.text_input("Şifre", type="password", on_change=password_entered, key="password"); return False
+
+if not check_password(): st.stop()
+
 with st.sidebar:
     st.header("Giriş")
     name = st.text_input("İsim", "Ziyaretçi")
     d_date = st.date_input("Tarih", value=datetime(1980, 11, 26))
     
-    # --- DÜZELTİLDİ: Dakika hassasiyeti için step=60 ---
+    # --- DÜZELTME: STEP=60 EKLENDİ (DAKİKA SEÇİMİ) ---
     d_time = st.time_input("Saat", value=datetime.strptime("16:00", "%H:%M"), step=60)
     
     st.caption("Saat Dilimi (GMT)")
     utc_offset = st.number_input("GMT Farkı", value=3, min_value=-12, max_value=12, step=1)
-    
     city = st.text_input("Şehir", "İstanbul")
-    
     st.write("---")
     transit_mode = st.checkbox("Transit Modu")
     start_date = datetime.now().date()
@@ -309,7 +295,6 @@ with st.sidebar:
         c1, c2 = st.columns(2)
         start_date = c1.date_input("Başlangıç", start_date)
         end_date = c2.date_input("Bitiş", end_date)
-        
     st.write("---")
     c1, c2 = st.columns(2)
     lat = c1.number_input("Enlem", 41.0) + c2.number_input("Dakika", 1.0)/60
@@ -321,27 +306,19 @@ with st.sidebar:
 if btn:
     info_html, ai_data, vis_data, cusps, aspects, transit_html, err = calculate_chart(name, d_date, d_time, lat, lon, utc_offset, transit_mode, start_date, end_date)
     
-    if err:
-        st.error(f"Bir hata oluştu: {err}")
+    if err: 
+        # Hata durumunda bile uygulamanın çökmemesi için mesaj göster
+        st.error(f"Hesaplama Hatası: {err}")
     else:
         tab1, tab2, tab3 = st.tabs(["📝 Yorum", "🗺️ Harita", "📊 Veri"])
-        
-        with st.spinner("Yıldızlar yorumlanıyor..."):
-            ai_reply = get_ai(f"Sen astrologsun. Kişi: {name}, {city}. Soru: {q}.\n\nVERİLER:\n{ai_data}\n\nGÖREV: Transit verisi varsa öngörü yap. Detaylı yorumla.")
-        
+        with st.spinner("Yıldızlar inceleniyor..."):
+            ai_reply = get_ai(f"Sen astrologsun. Kişi: {name}, {city}. Soru: {q}.\n\nVERİLER:\n{ai_data}\n\nGÖREV: Transit varsa öngörü yap. Detaylı yorumla.")
         with tab1:
             st.markdown(ai_reply)
-            
-            # PDF OLUŞTURMA (Güvenli Mod)
-            pdf_bytes = create_pdf(name, f"{d_date} {d_time} - {city}", ai_reply)
-            if pdf_bytes:
-                st.download_button("PDF İndir", pdf_bytes, "analiz.pdf", "application/pdf")
-            else:
-                st.warning("PDF oluşturulamadı (Karakter hatası), ancak analiz yukarıdadır.")
-                
-        with tab2:
-            st.pyplot(draw_chart_visual(vis_data, cusps))
-            
+            pdf_bytes = create_pdf(name, f"{d_date} - {city}", ai_reply)
+            if pdf_bytes: st.download_button("PDF İndir", pdf_bytes, "analiz.pdf", "application/pdf")
+            else: st.warning("PDF oluşturulamadı.")
+        with tab2: st.pyplot(draw_chart_visual(vis_data, cusps))
         with tab3:
             c1, c2 = st.columns(2)
             with c1: st.markdown(info_html, unsafe_allow_html=True)
