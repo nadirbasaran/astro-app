@@ -63,14 +63,14 @@ def calculate_chart(name, d_date, d_time, lat, lon, utc_offset, transit_enabled,
         # Tarih
         local_dt = datetime.combine(d_date, d_time)
         utc_dt = local_dt - timedelta(hours=utc_offset)
-        date_str = utc_dt.strftime('%Y/%m/%d %H:%M:%S') # String formatı en güvenlisidir
+        date_str = utc_dt.strftime('%Y/%m/%d %H:%M:%S') # String formatı
         
         # Gözlemci
         obs = ephem.Observer()
         obs.lat = str(lat)
         obs.lon = str(lon)
         obs.date = date_str
-        # obs.epoch AYARINI SİLDİM - Çökme sebebi buydu. Varsayılan (J2000) kullanacak.
+        # obs.epoch AYARINI SİLDİM - Varsayılan (J2000) kullanacak, çökmez.
         
         # Evler (Placidus Basit)
         ramc = float(obs.sidereal_time())
@@ -86,7 +86,7 @@ def calculate_chart(name, d_date, d_time, lat, lon, utc_offset, transit_enabled,
         asc_deg = normalize(math.degrees(asc_rad))
         
         cusps = {1: asc_deg, 10: mc_deg} 
-        # Diğer evleri yaklaşık hesapla (Hatasız yöntem)
+        # Diğer evleri yaklaşık hesapla (En hatasız yöntem)
         for i in range(2, 10): 
             if i not in cusps: cusps[i] = normalize(asc_deg + (i-1)*30)
         
@@ -97,7 +97,8 @@ def calculate_chart(name, d_date, d_time, lat, lon, utc_offset, transit_enabled,
         asc_sign = ZODIAC[int(cusps[1]/30)%12]
         mc_sign = ZODIAC[int(cusps[10]/30)%12]
         
-        # GÖRSEL VERİ (4 ELEMANLI OLMAK ZORUNDA)
+        # --- HATA DÜZELTME BURADA ---
+        # visual_data listesi tam 4 elemanlı (Ad, Burç, Derece, Sembol) olmalı.
         visual_data = [
             ("ASC", asc_sign, cusps[1], "ASC"), 
             ("MC", mc_sign, cusps[10], "MC")
@@ -118,7 +119,8 @@ def calculate_chart(name, d_date, d_time, lat, lon, utc_offset, transit_enabled,
             
             info_html += f"<div class='metric-box'><b>{n}</b>: {ZODIAC[sign_idx]} {dms}</div>"
             ai_data += f"{n}: {ZODIAC[sign_idx]} {dms}\n"
-            # BURASI ÇOK ÖNEMLİ: 4 Eleman ekliyoruz
+            
+            # BURASI ÇOK ÖNEMLİ: Listeye tam 4 eleman ekliyoruz.
             visual_data.append((n, ZODIAC[sign_idx], deg, PLANET_SYMBOLS.get(n, "")))
 
         # Açılar
@@ -127,6 +129,7 @@ def calculate_chart(name, d_date, d_time, lat, lon, utc_offset, transit_enabled,
         p_list = visual_data[2:]
         for i in range(len(p_list)):
             for j in range(i+1, len(p_list)):
+                # Burada unpack işlemi 4 değişken bekler, yukarıda 4 tane verdiğimiz için artık hata vermez.
                 n1, _, d1, _ = p_list[i]
                 n2, _, d2, _ = p_list[j]
                 diff = abs(d1 - d2)
@@ -145,7 +148,6 @@ def calculate_chart(name, d_date, d_time, lat, lon, utc_offset, transit_enabled,
         return info_html, ai_data, visual_data, cusps, aspects, transit_html, None
 
     except Exception as e:
-        # Hata olsa bile None döndürme, hata mesajını döndür
         return None, None, None, None, None, None, str(e)
 
 # --- ÇİZİM ---
@@ -195,14 +197,14 @@ with st.sidebar:
     name = st.text_input("İsim", "Misafir")
     d_date = st.date_input("Tarih", value=datetime(1980, 11, 26))
     
-    # DAKİKA AYARI (DÜZELTİLDİ)
+    # DAKİKA AYARI
     d_time = st.time_input("Saat", value=datetime.strptime("16:00", "%H:%M"), step=60)
     
     utc_offset = st.number_input("GMT", 3)
     city = st.text_input("Şehir", "İstanbul")
     tr_mode = st.checkbox("Transit Modu")
     
-    # Transit tarihleri (sadece mod açıksa göster)
+    # Transit tarihleri
     s_date = datetime.now()
     e_date = datetime.now()
     if tr_mode:
