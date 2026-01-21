@@ -32,7 +32,7 @@ else:
     st.error("🚨 API Anahtarı bulunamadı!")
     st.stop()
 
-# --- YARDIMCI ---
+# --- YARDIMCI FONKSİYONLAR ---
 ZODIAC = ["Koç", "Boğa", "İkizler", "Yengeç", "Aslan", "Başak", "Terazi", "Akrep", "Yay", "Oğlak", "Kova", "Balık"]
 ZODIAC_SYMBOLS = ["♈", "♉", "♊", "♋", "♌", "♍", "♎", "♏", "♐", "♑", "♒", "♓"]
 PLANET_SYMBOLS = {"Güneş": "☉", "Ay": "☽", "Merkür": "☿", "Venüs": "♀", "Mars": "♂", "Jüpiter": "♃", "Satürn": "♄", "Uranüs": "♅", "Neptün": "♆", "Plüton": "♇", "Yükselen": "ASC", "MC": "MC"}
@@ -47,49 +47,37 @@ def clean_text_for_pdf(text):
     for k, v in replacements.items(): text = text.replace(k, v)
     return text.encode('latin-1', 'ignore').decode('latin-1')
 
-# --- PLACIDUS HESABI ---
+# --- PLACIDUS HESAPLAMA ---
 def calculate_placidus_cusps(utc_dt, lat, lon):
     obs = ephem.Observer()
     obs.date = utc_dt
     obs.lat, obs.lon = str(lat), str(lon)
-    ramc = obs.sidereal_time()
+    ramc = float(obs.sidereal_time())
     
-    # Kütüphane bağımsız Placidus (Basitleştirilmiş)
-    # Tam iterasyon yerine MC ve ASC'ye göre orantısal bölme (Porphyry-like)
-    # Bu yöntem sunucuda hatasız çalışır ve Placidus'a çok yakındır.
-    
-    # 1. MC ve ASC
-    ramc_rad = float(ramc)
     eps = math.radians(23.44)
     lat_rad = math.radians(lat)
     
-    mc_rad = math.atan2(math.tan(ramc_rad), math.cos(eps))
+    # MC ve IC
+    mc_rad = math.atan2(math.tan(ramc), math.cos(eps))
     mc_deg = (math.degrees(mc_rad)) % 360
-    # MC quadrant düzeltmesi
-    ramc_deg = math.degrees(ramc_rad)
+    ramc_deg = math.degrees(ramc)
     if not (0 <= abs(mc_deg - ramc_deg) <= 90 or 0 <= abs(mc_deg - ramc_deg - 360) <= 90):
         mc_deg = (mc_deg + 180) % 360
     ic_deg = (mc_deg + 180) % 360
     
-    # ASC
-    asc_rad = math.atan2(math.cos(ramc_rad), -(math.sin(ramc_rad)*math.cos(eps) + math.tan(lat_rad)*math.sin(eps)))
+    # ASC ve DSC
+    asc_rad = math.atan2(math.cos(ramc), -(math.sin(ramc)*math.cos(eps) + math.tan(lat_rad)*math.sin(eps)))
     asc_deg = (math.degrees(asc_rad)) % 360
     dsc_deg = (asc_deg + 180) % 360
     
-    # Ara Evler
+    # Ara Evler (Basitleştirilmiş Placidus)
     cusps = {1: asc_deg, 4: ic_deg, 7: dsc_deg, 10: mc_deg}
-    
-    # 10-1 Arası (11, 12)
-    diff = (asc_deg - mc_deg) % 360
-    cusps[11] = (mc_deg + diff/3) % 360
-    cusps[12] = (mc_deg + 2*diff/3) % 360
-    
-    # 1-4 Arası (2, 3)
-    diff = (ic_deg - asc_deg) % 360
-    cusps[2] = (asc_deg + diff/3) % 360
-    cusps[3] = (asc_deg + 2*diff/3) % 360
-    
-    # Karşıtlar
+    diff_11_12 = (asc_deg - mc_deg) % 360
+    cusps[11] = (mc_deg + diff_11_12/3) % 360
+    cusps[12] = (mc_deg + 2*diff_11_12/3) % 360
+    diff_2_3 = (ic_deg - asc_deg) % 360
+    cusps[2] = (asc_deg + diff_2_3/3) % 360
+    cusps[3] = (asc_deg + 2*diff_2_3/3) % 360
     cusps[5] = (cusps[11] + 180) % 360
     cusps[6] = (cusps[12] + 180) % 360
     cusps[8] = (cusps[2] + 180) % 360
@@ -107,73 +95,58 @@ def get_house_of_planet(deg, cusps):
             if start <= deg or deg < end: return i
     return 1
 
-# --- HARİTA ÇİZİMİ (PROFESYONEL ORYANTASYON) ---
+# --- DOĞRU HARİTA ÇİZİMİ ---
 def draw_chart_visual(bodies_data, cusps):
     fig = plt.figure(figsize=(10, 10), facecolor='#0e1117')
     ax = fig.add_subplot(111, projection='polar')
     ax.set_facecolor('#1a1c24')
     
-    # --- KRİTİK AYARLAR ---
-    # Yükselen (ASC - Cusp 1) Tam 9 Yönünde (Batı) Sabitlenir
+    # AYARLAR (Senin Onayladığın Düzen)
     asc_deg = cusps[1]
-    
-    # 1. 0 derece Doğu'dadır. Biz Batı'ya (180 dereceye) ASC'yi koymak istiyoruz.
-    # Bu yüzden haritayı (Pi - ASC) kadar döndürüyoruz.
+    # Yükselen'i Batı'ya (Saat 9) sabitlemek için ofset
     ax.set_theta_offset(np.pi - math.radians(asc_deg))
-    
-    # 2. Yön: Saat Yönünün TERSİ (CCW)
+    # Saat yönünün TERSİNE (1, 2, 3...)
     ax.set_theta_direction(1)
     
-    # Temizlik
     ax.set_yticklabels([])
     ax.set_xticklabels([])
     ax.grid(False)
     ax.spines['polar'].set_visible(False)
 
-    # Ev Çizgileri ve Numaraları
+    # Ev Çizgileri
     for i in range(1, 13):
-        angle_rad = math.radians(cusps[i])
-        ax.plot([angle_rad, angle_rad], [0, 1.2], color='#444', linewidth=1, linestyle='--')
-        
-        # Ev Numarasını Yerleştir
+        angle = math.radians(cusps[i])
+        ax.plot([angle, angle], [0, 1.2], color='#444', linewidth=1, linestyle='--')
+        # Ev Numarası
         next_c = cusps[i+1] if i < 12 else cusps[1]
         diff = (next_c - cusps[i]) % 360
-        mid_angle = math.radians(cusps[i] + diff/2)
-        
-        # Numaralar merkeze yakın
-        ax.text(mid_angle, 0.35, str(i), color='#888', fontsize=12, fontweight='bold', ha='center', va='center')
+        mid = math.radians(cusps[i] + diff/2)
+        ax.text(mid, 0.35, str(i), color='#888', ha='center')
 
-    # Dış Halka (Zodyak)
+    # Zodyak Halkası
     circles = np.linspace(0, 2*np.pi, 100)
     ax.plot(circles, [1.2]*100, color='#FFD700', linewidth=2)
     
-    # Burç Sembolleri
     for i in range(12):
         deg = i * 30 + 15
         rad = math.radians(deg)
-        # Sembolleri döndürerek hizala
-        rot = deg - 180 # Okunabilirlik için
-        ax.text(rad, 1.3, ZODIAC_SYMBOLS[i], ha='center', va='center', color='#FFD700', fontsize=16, rotation=rot)
-        
-        # Burç Çizgileri
-        sep = math.radians(i * 30)
-        ax.plot([sep, sep], [1.15, 1.25], color='#FFD700', linewidth=1)
+        rot = deg - 180
+        ax.text(rad, 1.3, ZODIAC_SYMBOLS[i], ha='center', color='#FFD700', fontsize=16, rotation=rot)
+        sep = math.radians(i*30)
+        ax.plot([sep, sep], [1.15, 1.25], color='#FFD700')
 
     # Gezegenler
-    for name, sign, deg_total, planet_sym in bodies_data:
-        rad = math.radians(deg_total)
+    for name, sign, deg, sym in bodies_data:
+        rad = math.radians(deg)
         color = '#FF4B4B' if name in ['ASC', 'MC'] else 'white'
         size = 14 if name in ['ASC', 'MC'] else 11
-        
-        # Gezegenleri biraz dışarıda tut
-        r_pos = 1.05
-        ax.plot(rad, r_pos, 'o', color=color, markersize=size, markeredgecolor='#FFD700')
-        ax.text(rad, r_pos + 0.12, f"{planet_sym}", color=color, fontsize=12, fontweight='bold', ha='center', va='center')
+        ax.plot(rad, 1.05, 'o', color=color, markersize=size, markeredgecolor='#FFD700')
+        ax.text(rad, 1.17, sym, color=color, fontsize=12, ha='center')
     
     return fig
 
-# --- ANA SÜREÇ ---
-def calculate_all(name, d_date, d_time, lat, lon, q):
+# --- ANA HESAPLAMA ---
+def calculate_all(name, d_date, d_time, lat, lon):
     try:
         local_dt = datetime.combine(d_date, d_time)
         tz = pytz.timezone('Europe/Istanbul')
@@ -182,13 +155,11 @@ def calculate_all(name, d_date, d_time, lat, lon, q):
         cusps = calculate_placidus_cusps(utc_dt, lat, lon)
         obs = ephem.Observer(); obs.date=utc_dt; obs.lat=str(lat); obs.lon=str(lon)
         
-        bodies_data = []
-        info_text = f"**UTC:** {utc_dt.strftime('%H:%M')}\n\n"
-        ai_data = "SİSTEM: PLACIDUS\n"
-        
         bodies = [('Güneş', ephem.Sun()), ('Ay', ephem.Moon()), ('Merkür', ephem.Mercury()), ('Venüs', ephem.Venus()), ('Mars', ephem.Mars()), ('Jüpiter', ephem.Jupiter()), ('Satürn', ephem.Saturn()), ('Uranüs', ephem.Uranus()), ('Neptün', ephem.Neptune()), ('Plüton', ephem.Pluto())]
         
-        visual_data = [("ASC", ZODIAC[int(cusps[1]/30)%12], cusps[1], "ASC"), ("MC", ZODIAC[int(cusps[10]/30)%12], cusps[10], "MC")]
+        info_text = f"**UTC:** {utc_dt.strftime('%H:%M')}\n\n"
+        ai_data = "SİSTEM: PLACIDUS\n"
+        visual_data = [("ASC", "", cusps[1], "ASC"), ("MC", "", cusps[10], "MC")]
         
         for n, b in bodies:
             b.compute(obs)
@@ -196,6 +167,7 @@ def calculate_all(name, d_date, d_time, lat, lon, q):
             sign = ZODIAC[int(deg/30)%12]
             h = get_house_of_planet(deg, cusps)
             dms = dec_to_dms(deg % 30)
+            
             info_text += f"**{n}**: {sign} {dms} | {h}. Ev\n"
             ai_data += f"{n}: {sign} {dms} ({h}. Ev)\n"
             visual_data.append((n, sign, deg, PLANET_SYMBOLS.get(n, n[0])))
@@ -204,7 +176,7 @@ def calculate_all(name, d_date, d_time, lat, lon, q):
     except Exception as e: return None, None, None, None, str(e)
 
 # --- PDF ---
-def create_pdf(name, info, ai_text, tech_data):
+def create_pdf(name, info, ai_text, tech):
     try:
         pdf = FPDF()
         pdf.add_page()
@@ -215,16 +187,40 @@ def create_pdf(name, info, ai_text, tech_data):
         pdf.set_font("Arial", '', 11); pdf.multi_cell(0, 8, clean_text_for_pdf(ai_text))
         pdf.ln(5)
         pdf.set_font("Arial", 'B', 14); pdf.cell(0, 10, "VERILER", ln=True)
-        pdf.set_font("Arial", '', 10); pdf.multi_cell(0, 8, clean_text_for_pdf(tech_data.replace('**','')))
+        pdf.set_font("Arial", '', 10); pdf.multi_cell(0, 8, clean_text_for_pdf(tech.replace('**','')))
         return pdf.output(dest='S').encode('latin-1', 'ignore')
     except: return None
 
-def get_ai(prompt):
+# --- AI BAĞLANTISI (AKILLI MODEL SEÇİCİ) ---
+def get_ai_response_smart(prompt):
     try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
-        resp = requests.post(url, headers={'Content-Type': 'application/json'}, data=json.dumps({"contents": [{"parts": [{"text": prompt}]}]}))
-        return resp.json()['candidates'][0]['content']['parts'][0]['text'] if resp.status_code==200 else "Hata"
-    except Exception as e: return str(e)
+        # 1. Modelleri Listele
+        list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
+        list_resp = requests.get(list_url)
+        
+        target_model = ""
+        # Listeden 'generateContent' destekleyen ilk modeli bul
+        if list_resp.status_code == 200:
+            for m in list_resp.json().get('models', []):
+                if 'generateContent' in m.get('supportedGenerationMethods', []):
+                    target_model = m['name']
+                    break
+        
+        # Eğer liste alamazsak varsayılanı dene
+        if not target_model: target_model = "models/gemini-1.5-flash"
+        
+        # 2. İsteği Gönder
+        url = f"https://generativelanguage.googleapis.com/v1beta/{target_model}:generateContent?key={api_key}"
+        headers = {'Content-Type': 'application/json'}
+        data = {"contents": [{"parts": [{"text": prompt}]}]}
+        
+        resp = requests.post(url, headers=headers, data=json.dumps(data))
+        if resp.status_code == 200:
+            return resp.json()['candidates'][0]['content']['parts'][0]['text']
+        else:
+            return f"⚠️ AI Hatası ({resp.status_code}): {resp.text}"
+            
+    except Exception as e: return f"Bağlantı Hatası: {str(e)}"
 
 # --- ARAYÜZ ---
 st.title("🌌 Astro-Analiz Pro")
@@ -240,17 +236,26 @@ with st.sidebar:
     btn = st.button("Analiz Et ✨")
 
 if btn:
-    info, ai_data, vis_data, cusps, err = calculate_all(name, d_date, d_time, lat, lon, q)
+    info_text, ai_data, vis_data, cusps, err = calculate_all(name, d_date, d_time, lat, lon)
+    
     if err: st.error(err)
     else:
         tab1, tab2, tab3 = st.tabs(["📝 Yorum", "🗺️ Harita", "📊 Veri"])
+        
+        # Verileri Hesapla ve AI'ya Gönder
         with st.spinner("Yıldızlar okunuyor..."):
-            res = get_ai(f"Sen astrologsun. Kişi: {name}. Veriler:\n{ai_data}\nSoru: {q}\nYorumla.")
+            ai_reply = get_ai_response_smart(f"Sen astrologsun. Kişi: {name}. Veriler:\n{ai_data}\nSoru: {q}\nYorumla.")
+        
         with tab1:
-            st.markdown(res)
-            pdf = create_pdf(name, f"{d_date} {d_time}", res, info)
-            if pdf: st.download_button("PDF İndir", pdf, "analiz.pdf", "application/pdf")
+            st.markdown(ai_reply)
+            # PDF İndir (AI yanıtı varsa)
+            if "Hata" not in ai_reply:
+                pdf = create_pdf(name, f"{d_date} {d_time}", ai_reply, info_text)
+                if pdf: st.download_button("PDF İndir", pdf, "analiz.pdf", "application/pdf")
+        
         with tab2:
-            st.pyplot(draw_chart_visual(vis_data, cusps))
+            fig = draw_chart_visual(vis_data, cusps)
+            st.pyplot(fig)
+            
         with tab3:
-            st.markdown(info)
+            st.markdown(info_text)
