@@ -1,6 +1,6 @@
 import streamlit as st
 import matplotlib
-matplotlib.use('Agg')
+matplotlib.use('Agg') # Siyah ekran koruması
 import matplotlib.pyplot as plt
 import ephem
 import math
@@ -71,6 +71,8 @@ def clean_text_for_pdf(text):
 def calculate_placidus_cusps(utc_dt, lat, lon):
     obs = ephem.Observer()
     obs.date = utc_dt
+    # KRİTİK DÜZELTME 1: Ekinoksu doğum tarihine eşitle (J2000 yerine)
+    obs.epoch = utc_dt
     obs.lat, obs.lon = str(lat), str(lon)
     ramc = float(obs.sidereal_time())
     eps = math.radians(23.44)
@@ -145,12 +147,14 @@ def calculate_transit_range(birth_bodies, start_dt, end_dt, lat, lon):
     for n, b in heavy_planets:
         # Başlangıç Konumu
         obs.date = start_dt
+        obs.epoch = start_dt # Transitler için de epoch ayarla
         b.compute(obs)
         deg_start = math.degrees(ephem.Ecliptic(b).lon)
         sign_start = ZODIAC[int(deg_start/30)%12]
         
         # Bitiş Konumu
         obs.date = end_dt
+        obs.epoch = end_dt # Transitler için de epoch ayarla
         b.compute(obs)
         deg_end = math.degrees(ephem.Ecliptic(b).lon)
         sign_end = ZODIAC[int(deg_end/30)%12]
@@ -223,6 +227,9 @@ def calculate_all(name, d_date, d_time, lat, lon, transit_enabled, start_date, e
         
         cusps = calculate_placidus_cusps(utc_dt, lat, lon)
         obs = ephem.Observer(); obs.date=utc_dt; obs.lat=str(lat); obs.lon=str(lon)
+        
+        # KRİTİK DÜZELTME 2: Gezegenleri de doğum yılına göre (Precession düzeltmeli) hesapla
+        obs.epoch = obs.date
         
         bodies = [('Güneş', ephem.Sun()), ('Ay', ephem.Moon()), ('Merkür', ephem.Mercury()), ('Venüs', ephem.Venus()), ('Mars', ephem.Mars()), ('Jüpiter', ephem.Jupiter()), ('Satürn', ephem.Saturn()), ('Uranüs', ephem.Uranus()), ('Neptün', ephem.Neptune()), ('Plüton', ephem.Pluto())]
         
@@ -307,7 +314,7 @@ with st.sidebar:
     name = st.text_input("İsim", "Ziyaretçi")
     d_date = st.date_input("Doğum Tarihi", value=datetime(1980, 11, 26))
     
-    # --- DÜZELTME BURADA: step=60 EKLENDİ ---
+    # --- DAKİKA HASSASİYETİ GERİ GELDİ ---
     d_time = st.time_input("Doğum Saati", value=datetime.strptime("16:00", "%H:%M"), step=60)
     
     city = st.text_input("Şehir", "İstanbul")
