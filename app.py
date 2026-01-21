@@ -12,35 +12,50 @@ st.set_page_config(page_title="Astro-Analiz Pro", layout="wide", page_icon="🔮
 if "GOOGLE_API_KEY" in st.secrets:
     api_key = st.secrets["GOOGLE_API_KEY"]
 else:
-    st.error("🚨 HATA: API Anahtarı 'Secrets' kısmında bulunamadı!")
+    st.error("🚨 HATA: API Anahtarı bulunamadı!")
     st.stop()
 
-# --- DİREKT BAĞLANTI FONKSİYONU (KÜTÜPHANESİZ) ---
+# --- OTOMATİK MODEL SEÇİCİ VE İSTEK GÖNDERİCİ ---
 def get_ai_response(prompt):
-    # Google'ın en yeni ve hızlı modeli
-    model_name = "gemini-1.5-flash"
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
-    
-    headers = {'Content-Type': 'application/json'}
-    data = {
-        "contents": [{
-            "parts": [{"text": prompt}]
-        }]
-    }
-    
     try:
-        # Direkt internet isteği gönderiyoruz (Requests)
-        response = requests.post(url, headers=headers, data=json.dumps(data))
+        # ADIM 1: Önce elimizdeki modelleri listele (Menüye Bak)
+        list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
+        list_resp = requests.get(list_url)
+        
+        if list_resp.status_code != 200:
+            return f"⚠️ Model Listesi Alınamadı. Hata Kodu: {list_resp.status_code}"
+            
+        models = list_resp.json().get('models', [])
+        
+        # ADIM 2: 'generateContent' özelliğini destekleyen ilk modeli bul
+        target_model_name = ""
+        for m in models:
+            if 'generateContent' in m.get('supportedGenerationMethods', []):
+                target_model_name = m['name'] # Örn: models/gemini-1.0-pro
+                break
+        
+        if not target_model_name:
+            return "⚠️ Hesabınızda uygun bir AI modeli bulunamadı."
+
+        # ADIM 3: Bulunan modele soruyu gönder
+        generate_url = f"https://generativelanguage.googleapis.com/v1beta/{target_model_name}:generateContent?key={api_key}"
+        
+        headers = {'Content-Type': 'application/json'}
+        data = {"contents": [{"parts": [{"text": prompt}]}]}
+        
+        response = requests.post(generate_url, headers=headers, data=json.dumps(data))
         
         if response.status_code == 200:
-            return response.json()['candidates'][0]['content']['parts'][0]['text']
+            # Başarılı! Cevabı al ve model ismini de ekle ki görelim
+            ai_text = response.json()['candidates'][0]['content']['parts'][0]['text']
+            return f"Thinking Process: **{target_model_name.replace('models/', '')}** kullanıldı.\n\n" + ai_text
         else:
-            return f"⚠️ **HATA:** Google sunucusu {response.status_code} koduyla yanıt verdi.\nDetay: {response.text}"
+            return f"⚠️ Hata ({target_model_name}): {response.text}"
             
     except Exception as e:
-        return f"⚠️ **BAĞLANTI HATASI:** {str(e)}"
+        return f"⚠️ Bağlantı Hatası: {str(e)}"
 
-# --- HESAPLAMA (NASA/EPHEM) ---
+# --- HESAPLAMA (NASA) ---
 ZODIAC = ["Koç", "Boğa", "İkizler", "Yengeç", "Aslan", "Başak", "Terazi", "Akrep", "Yay", "Oğlak", "Kova", "Balık"]
 
 def calculate_chart(name, d_date, d_time, lat, lon):
@@ -67,8 +82,7 @@ def calculate_chart(name, d_date, d_time, lat, lon):
     except Exception as e: return None, str(e)
 
 # --- ARAYÜZ ---
-st.title("🔮 Astro-Analiz (Final Sürüm)")
-st.caption("NASA Verisi + Google Gemini (Direkt Bağlantı)")
+st.title("🔮 Astro-Analiz (Akıllı Model)")
 
 with st.sidebar:
     st.header("Giriş Paneli")
@@ -91,7 +105,7 @@ if btn:
     with c2:
         st.success("Yorum")
         if data:
-            with st.spinner("AI Yanıtlıyor..."):
+            with st.spinner("Uygun AI Modeli Aranıyor ve Yorumlanıyor..."):
                 prompt = f"Sen astrologsun. Kişi: {name}, {city}. Soru: {q}. Veriler: {data}"
                 res = get_ai_response(prompt)
                 st.markdown(res)
