@@ -69,16 +69,19 @@ def calculate_chart(name, d_date, d_time, lat, lon, utc_offset, transit_enabled,
         local_dt = datetime.combine(d_date, d_time)
         utc_dt = local_dt - timedelta(hours=utc_offset)
         
+        # --- TEK DEĞİŞİKLİK BURADA: TARİHİ STRING'E ÇEVİRİYORUZ ---
+        # Bu işlem 'format string' hatasını %100 önler.
+        date_str = utc_dt.strftime('%Y/%m/%d %H:%M:%S')
+
         # PyEphem Gözlemci Ayarları
         obs = ephem.Observer()
         obs.lat = str(lat)
         obs.lon = str(lon)
-        obs.date = utc_dt
+        obs.date = date_str  # String olarak verdik
         
-        # --- KRİTİK AYAR: EPOCH OF DATE (Precession Düzeltmesi) ---
-        # Bu ayar, gezegen konumlarını 1980 yılına göre hesaplar (J2000 değil).
-        # Güneş'in ev kaymasını düzelten satır budur.
-        obs.epoch = utc_dt 
+        # --- KRİTİK AYAR: EPOCH ---
+        # Güneş'i doğru eve (7. Ev) oturtan ayar. String olarak verdik.
+        obs.epoch = date_str 
         
         # Placidus Ev Sistemi Hesaplama (Manual)
         ramc = float(obs.sidereal_time())
@@ -183,9 +186,14 @@ def calculate_chart(name, d_date, d_time, lat, lon, utc_offset, transit_enabled,
             tr_planets = [('Jüpiter', ephem.Jupiter()), ('Satürn', ephem.Saturn()), ('Uranüs', ephem.Uranus()), ('Neptün', ephem.Neptune()), ('Plüton', ephem.Pluto())]
             
             for n, b in tr_planets:
-                obs_tr.date = tr_start; obs_tr.epoch = tr_start; b.compute(obs_tr)
+                # TRANSİTLER İÇİN DE STRING FORMATI KULLANIYORUZ
+                tr_s_str = tr_start.strftime('%Y/%m/%d %H:%M:%S')
+                tr_e_str = tr_end.strftime('%Y/%m/%d %H:%M:%S')
+
+                obs_tr.date = tr_s_str; obs_tr.epoch = tr_s_str; b.compute(obs_tr)
                 d1 = math.degrees(ephem.Ecliptic(b).lon)
-                obs_tr.date = tr_end; obs_tr.epoch = tr_end; b.compute(obs_tr)
+                
+                obs_tr.date = tr_e_str; obs_tr.epoch = tr_e_str; b.compute(obs_tr)
                 d2 = math.degrees(ephem.Ecliptic(b).lon)
                 
                 s1 = ZODIAC[int(d1/30)%12]
