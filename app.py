@@ -1,6 +1,6 @@
 import streamlit as st
 import matplotlib
-matplotlib.use('Agg') # Siyah ekran koruması
+matplotlib.use('Agg') # Grafik hatasını önler (Siyah ekran çözümü)
 import matplotlib.pyplot as plt
 import ephem
 import math
@@ -14,15 +14,13 @@ from fpdf import FPDF
 # --- SAYFA AYARLARI ---
 st.set_page_config(page_title="Astro-Analiz Pro", layout="wide", page_icon="🔮")
 
-# --- CSS STİLLERİ ---
+# --- CSS ---
 st.markdown("""
     <style>
     .stApp { background: linear-gradient(to bottom, #0e1117, #24283b); color: #e0e0e0; }
     h1, h2, h3 { color: #FFD700 !important; font-family: 'Helvetica', sans-serif; }
     .stButton>button { background-color: #FFD700; color: #000; border-radius: 20px; font-weight: bold; width: 100%; }
-    [data-testid="stSidebar"] { background-color: #161a25; border-right: 1px solid #FFD700; }
     .metric-box { background-color: #1e2130; padding: 10px; border-radius: 8px; border-left: 4px solid #FFD700; margin-bottom: 8px; font-size: 14px; color: white; }
-    .metric-box b { color: #FFD700; }
     .aspect-box { background-color: #25293c; padding: 5px; margin: 2px; border-radius: 4px; font-size: 13px; border: 1px solid #444; }
     .transit-box { background-color: #2d1b2e; border-left: 4px solid #ff4b4b; padding: 8px; margin-bottom: 5px; font-size: 13px; }
     </style>
@@ -46,7 +44,7 @@ def dec_to_dms(deg):
     return f"{d:02d}° {m:02d}'"
 
 def clean_text_for_pdf(text):
-    # Türkçe karakterleri İngilizce karşılıklarına çevir
+    # Türkçe karakterleri İngilizceye çevir (PDF çökmesini önler)
     replacements = {'ğ':'g', 'Ğ':'G', 'ş':'s', 'Ş':'S', 'ı':'i', 'İ':'I', 'ü':'u', 'Ü':'U', 'ö':'o', 'Ö':'O', 'ç':'c', 'Ç':'C', '–':'-', '’':"'", '“':'"', '”':'"', '…':'...'}
     for k, v in replacements.items(): text = text.replace(k, v)
     return text.encode('latin-1', 'replace').decode('latin-1')
@@ -66,16 +64,18 @@ def calculate_chart(name, d_date, d_time, lat, lon, utc_offset, transit_enabled,
         obs.lat = str(lat)
         obs.lon = str(lon)
         
-        # HATA DÜZELTME: Tarihi Ephem Date formatına çevirip veriyoruz
-        # Bu, "not enough arguments for format string" hatasını çözer.
-        obs.date = ephem.Date(utc_dt)
+        # --- HATA DÜZELTME: Tarihi String (Metin) olarak veriyoruz ---
+        # Bu sayede "format string" hatası kesinlikle çözülür.
+        date_str = utc_dt.strftime('%Y/%m/%d %H:%M:%S')
+        obs.date = date_str
         
-        # KRİTİK: Güneş'i 7. Eve oturtan ayar (Doğum Ekinoksu)
-        obs.epoch = obs.date 
+        # --- KRİTİK: Güneş'i 7. Eve oturtan ayar ---
+        # Epoch'u doğum tarihine eşitliyoruz.
+        obs.epoch = date_str
         
         # 3. Ev Sistemi (Placidus & Eğim)
         ramc = float(obs.sidereal_time())
-        ecl = ephem.Ecliptic(obs) # epoch=date olduğu için doğru eğim gelir
+        ecl = ephem.Ecliptic(obs)
         eps = float(ecl.obliquity)
         lat_rad = math.radians(lat)
         
@@ -90,7 +90,7 @@ def calculate_chart(name, d_date, d_time, lat, lon, utc_offset, transit_enabled,
         asc_deg = normalize(math.degrees(asc_rad))
         dsc_deg = normalize(asc_deg + 180)
 
-        # Placidus Pole Method (Ev Bölme)
+        # Ara Evler (Placidus Yaklaşımı - Unequal)
         def cusp_pole(offset_deg, factor):
             pole_rad = math.atan(math.tan(lat_rad) * factor)
             ramc_off = ramc + math.radians(offset_deg)
@@ -109,7 +109,7 @@ def calculate_chart(name, d_date, d_time, lat, lon, utc_offset, transit_enabled,
         bodies = [('Güneş', ephem.Sun()), ('Ay', ephem.Moon()), ('Merkür', ephem.Mercury()), ('Venüs', ephem.Venus()), ('Mars', ephem.Mars()), ('Jüpiter', ephem.Jupiter()), ('Satürn', ephem.Saturn()), ('Uranüs', ephem.Uranus()), ('Neptün', ephem.Neptune()), ('Plüton', ephem.Pluto())]
         
         info_html = f"<div class='metric-box'>🌍 <b>Doğum (UTC):</b> {utc_dt.strftime('%H:%M')} (GMT+{utc_offset})</div>"
-        ai_data = "SİSTEM: PLACIDUS (Doğum Ekinoksu)\n"
+        ai_data = "SİSTEM: PLACIDUS (Doğum Ekinoksu - Epoch Fixed)\n"
         
         asc_sign = ZODIAC[int(cusps[1]/30)%12]
         mc_sign = ZODIAC[int(cusps[10]/30)%12]
@@ -119,20 +119,20 @@ def calculate_chart(name, d_date, d_time, lat, lon, utc_offset, transit_enabled,
         info_html += f"<div class='metric-box'>👑 <b>MC:</b> {mc_sign} {dec_to_dms(cusps[10]%30)}</div><br>"
         ai_data += f"YÜKSELEN: {asc_sign} {dec_to_dms(cusps[1]%30)}\nMC: {mc_sign}\n"
 
-        # Ev Bulucu Fonksiyon
+        # Ev Bulucu
         def get_house(deg, cusps_dict):
             for i in range(1, 13):
                 start = cusps_dict[i]
                 end = cusps_dict[i+1] if i < 12 else cusps_dict[1]
                 if start < end:
                     if start <= deg < end: return i
-                else: # 360/0 Sınır geçişi
+                else:
                     if start <= deg or deg < end: return i
             return 1
 
         for n, b in bodies:
             b.compute(obs)
-            # HATA DÜZELTME: 'ecl_lon' yerine standart Ecliptic hesaplama
+            # HATA DÜZELTME: ecl_lon yerine Ecliptic().lon kullanıyoruz.
             ecl_obj = ephem.Ecliptic(b)
             deg = math.degrees(ecl_obj.lon)
             
@@ -175,19 +175,16 @@ def calculate_chart(name, d_date, d_time, lat, lon, utc_offset, transit_enabled,
             tr_planets = [('Jüpiter', ephem.Jupiter()), ('Satürn', ephem.Saturn()), ('Uranüs', ephem.Uranus()), ('Neptün', ephem.Neptune()), ('Plüton', ephem.Pluto())]
             
             for n, b in tr_planets:
-                # Başlangıç
-                obs_tr.date = ephem.Date(tr_start)
-                obs_tr.epoch = obs_tr.date # Transitler için de epoch ayarla
+                # String dönüşümü ile hata koruması
+                obs_tr.date = tr_start.strftime('%Y/%m/%d %H:%M:%S')
+                obs_tr.epoch = obs_tr.date 
                 b.compute(obs_tr)
-                ecl_start = ephem.Ecliptic(b)
-                d1 = math.degrees(ecl_start.lon)
+                d1 = math.degrees(ephem.Ecliptic(b).lon)
                 
-                # Bitiş
-                obs_tr.date = ephem.Date(tr_end)
+                obs_tr.date = tr_end.strftime('%Y/%m/%d %H:%M:%S')
                 obs_tr.epoch = obs_tr.date
                 b.compute(obs_tr)
-                ecl_end = ephem.Ecliptic(b)
-                d2 = math.degrees(ecl_end.lon)
+                d2 = math.degrees(ephem.Ecliptic(b).lon)
                 
                 s1 = ZODIAC[int(d1/30)%12]
                 s2 = ZODIAC[int(d2/30)%12]
@@ -258,6 +255,7 @@ def create_pdf(name, info, ai_text):
     except: return None
 
 def get_ai(prompt):
+    if not api_key: return "API Key Eksik."
     try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
         resp = requests.post(url, headers={'Content-Type': 'application/json'}, data=json.dumps({"contents": [{"parts": [{"text": prompt}]}]}))
@@ -265,7 +263,7 @@ def get_ai(prompt):
     except Exception as e: return str(e)
 
 # --- ARAYÜZ ---
-st.title("🌌 Astro-Analiz Pro (Stable Fix)")
+st.title("🌌 Astro-Analiz Pro (Final)")
 # GÜVENLİK
 def check_password():
     if "password_correct" not in st.session_state: st.session_state["password_correct"] = False
@@ -282,7 +280,7 @@ with st.sidebar:
     name = st.text_input("İsim", "Ziyaretçi")
     d_date = st.date_input("Tarih", value=datetime(1980, 11, 26))
     
-    # --- DÜZELTME: STEP=60 EKLENDİ (DAKİKA SEÇİMİ) ---
+    # --- DÜZELTİLDİ: step=60 ---
     d_time = st.time_input("Saat", value=datetime.strptime("16:00", "%H:%M"), step=60)
     
     st.caption("Saat Dilimi (GMT)")
