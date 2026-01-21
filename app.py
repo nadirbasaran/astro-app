@@ -14,7 +14,56 @@ from fpdf import FPDF
 # --- SAYFA AYARLARI ---
 st.set_page_config(page_title="Astro-Analiz Pro", layout="wide", page_icon="🔮")
 
-# --- CSS (Kutucuklu Tasarım İçin) ---
+# --------------------------------------------------------------------------
+# 🔒 GÜVENLİK DUVARI (LOGIN EKRANI)
+# --------------------------------------------------------------------------
+def check_password():
+    """Returns `True` if the user had a correct password."""
+    
+    def password_entered():
+        """Checks whether a password entered by the user is correct."""
+        if st.session_state["password"] == st.secrets["APP_PASSWORD"]:
+            st.session_state["password_correct"] = True
+            del st.session_state["password"]  # Şifreyi session'dan temizle
+        else:
+            st.session_state["password_correct"] = False
+
+    # Session state başlatma
+    if "password_correct" not in st.session_state:
+        st.session_state["password_correct"] = False
+
+    # Şifre doğruysa True dön
+    if st.session_state["password_correct"]:
+        return True
+
+    # Şifre girişi arayüzü
+    st.markdown("""
+        <style>
+        .stTextInput > label { display:none; }
+        </style>
+        """, unsafe_allow_html=True)
+    
+    col1, col2, col3 = st.columns([1,2,1])
+    with col2:
+        st.warning("🔒 Bu uygulama özel erişim gerektirir.")
+        st.text_input(
+            "Lütfen Şifreyi Giriniz", 
+            type="password", 
+            on_change=password_entered, 
+            key="password",
+            placeholder="Şifre..."
+        )
+        st.caption("Astro-Analiz Pro Güvenli Giriş Sistemi")
+    return False
+
+# Eğer şifre yanlışsa uygulamayı DURDUR
+if not check_password():
+    st.stop()
+# --------------------------------------------------------------------------
+# GÜVENLİK DUVARI SONU (Uygulama buradan sonra başlar)
+# --------------------------------------------------------------------------
+
+# --- CSS ---
 st.markdown("""
     <style>
     .stApp { background: linear-gradient(to bottom, #0e1117, #24283b); color: #e0e0e0; }
@@ -22,18 +71,25 @@ st.markdown("""
     .stButton>button { background-color: #FFD700; color: #000; border-radius: 20px; border: none; font-weight: bold; width: 100%; }
     [data-testid="stSidebar"] { background-color: #161a25; border-right: 1px solid #FFD700; }
     
-    /* VERİ KUTUCUKLARI TASARIMI */
+    /* VERİ KUTUCUKLARI */
     .metric-box { 
         background-color: #1e2130; 
-        padding: 12px; 
+        padding: 10px; 
         border-radius: 8px; 
         border-left: 4px solid #FFD700; 
         margin-bottom: 8px; 
-        font-size: 15px;
+        font-size: 14px;
         color: white;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.3);
     }
     .metric-box b { color: #FFD700; }
+    .aspect-box {
+        background-color: #25293c;
+        padding: 5px 10px;
+        margin: 2px;
+        border-radius: 4px;
+        font-size: 13px;
+        border: 1px solid #444;
+    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -44,7 +100,7 @@ else:
     st.error("🚨 API Anahtarı bulunamadı!")
     st.stop()
 
-# --- SEMBOLLER VE VERİLER ---
+# --- SABİTLER ---
 ZODIAC = ["Koç", "Boğa", "İkizler", "Yengeç", "Aslan", "Başak", "Terazi", "Akrep", "Yay", "Oğlak", "Kova", "Balık"]
 ZODIAC_SYMBOLS = ["♈", "♉", "♊", "♋", "♌", "♍", "♎", "♏", "♐", "♑", "♒", "♓"]
 PLANET_SYMBOLS = {"Güneş": "☉", "Ay": "☽", "Merkür": "☿", "Venüs": "♀", "Mars": "♂", "Jüpiter": "♃", "Satürn": "♄", "Uranüs": "♅", "Neptün": "♆", "Plüton": "♇", "Yükselen": "ASC", "MC": "MC"}
@@ -59,13 +115,12 @@ def clean_text_for_pdf(text):
     for k, v in replacements.items(): text = text.replace(k, v)
     return text.encode('latin-1', 'ignore').decode('latin-1')
 
-# --- PLACIDUS HESAPLAMA ---
+# --- HESAPLAMA MOTORU ---
 def calculate_placidus_cusps(utc_dt, lat, lon):
     obs = ephem.Observer()
     obs.date = utc_dt
     obs.lat, obs.lon = str(lat), str(lon)
     ramc = float(obs.sidereal_time())
-    
     eps = math.radians(23.44)
     lat_rad = math.radians(lat)
     
@@ -91,7 +146,6 @@ def calculate_placidus_cusps(utc_dt, lat, lon):
     cusps[6] = (cusps[12] + 180) % 360
     cusps[8] = (cusps[2] + 180) % 360
     cusps[9] = (cusps[3] + 180) % 360
-    
     return cusps
 
 def get_house_of_planet(deg, cusps):
@@ -104,7 +158,48 @@ def get_house_of_planet(deg, cusps):
             if start <= deg or deg < end: return i
     return 1
 
-# --- HARİTA ÇİZİMİ (SABİT 9 YÖNÜ) ---
+# --- AÇI (ASPECT) HESAPLAMA ---
+def calculate_aspects(bodies, orb=8):
+    aspects = []
+    planet_list = [(n, d) for n, _, d, _ in bodies]
+    for i in range(len(planet_list)):
+        for j in range(i+1, len(planet_list)):
+            p1_name, p1_deg = planet_list[i]
+            p2_name, p2_deg = planet_list[j]
+            diff = abs(p1_deg - p2_deg)
+            if diff > 180: diff = 360 - diff
+            
+            aspect_name = ""
+            if diff <= orb: aspect_name = "Kavuşum (0°)"
+            elif 60 - 6 <= diff <= 60 + 6: aspect_name = "Sekstil (60°)"
+            elif 90 - orb <= diff <= 90 + orb: aspect_name = "Kare (90°)"
+            elif 120 - orb <= diff <= 120 + orb: aspect_name = "Üçgen (120°)"
+            elif 180 - orb <= diff <= 180 + orb: aspect_name = "Karşıt (180°)"
+            
+            if aspect_name: aspects.append(f"{p1_name} {aspect_name} {p2_name}")
+    return aspects
+
+# --- TRANSIT HESAPLAMA ---
+def calculate_transits(birth_bodies, transit_dt, lat, lon):
+    obs = ephem.Observer(); obs.date = transit_dt; obs.lat, obs.lon = str(lat), str(lon)
+    bodies = [('Güneş', ephem.Sun()), ('Ay', ephem.Moon()), ('Merkür', ephem.Mercury()), ('Venüs', ephem.Venus()), ('Mars', ephem.Mars()), ('Jüpiter', ephem.Jupiter()), ('Satürn', ephem.Saturn()), ('Uranüs', ephem.Uranus()), ('Neptün', ephem.Neptune()), ('Plüton', ephem.Pluto())]
+    transit_data = []; transit_hits = []
+    
+    for n, b in bodies:
+        b.compute(obs)
+        deg = math.degrees(ephem.Ecliptic(b).lon)
+        sign = ZODIAC[int(deg/30)%12]
+        transit_data.append((n, sign, dec_to_dms(deg % 30)))
+        
+        for natal_n, _, natal_deg, _ in birth_bodies:
+            diff = abs(deg - natal_deg)
+            if diff > 180: diff = 360 - diff
+            if diff <= 3: transit_hits.append(f"Transit {n}, Natal {natal_n} ile Kavuşumda")
+            elif 117 <= diff <= 123: transit_hits.append(f"Transit {n}, Natal {natal_n} ile Üçgen")
+            elif 87 <= diff <= 93: transit_hits.append(f"Transit {n}, Natal {natal_n} ile Kare")
+    return transit_data, transit_hits
+
+# --- GÖRSELLEŞTİRME ---
 def draw_chart_visual(bodies_data, cusps):
     fig = plt.figure(figsize=(10, 10), facecolor='#0e1117')
     ax = fig.add_subplot(111, projection='polar')
@@ -112,12 +207,10 @@ def draw_chart_visual(bodies_data, cusps):
     
     asc_deg = cusps[1]
     ax.set_theta_offset(np.pi - math.radians(asc_deg))
-    ax.set_theta_direction(1) # SAAT YÖNÜNÜN TERSİ
-    
+    ax.set_theta_direction(1)
     ax.set_yticklabels([]); ax.set_xticklabels([])
     ax.grid(False); ax.spines['polar'].set_visible(False)
 
-    # Evler
     for i in range(1, 13):
         angle = math.radians(cusps[i])
         ax.plot([angle, angle], [0, 1.2], color='#444', linewidth=1, linestyle='--')
@@ -126,7 +219,6 @@ def draw_chart_visual(bodies_data, cusps):
         mid = math.radians(cusps[i] + diff/2)
         ax.text(mid, 0.4, str(i), color='#888', ha='center', fontsize=11, fontweight='bold')
 
-    # Zodyak
     circles = np.linspace(0, 2*np.pi, 100)
     ax.plot(circles, [1.2]*100, color='#FFD700', linewidth=2)
     for i in range(12):
@@ -136,18 +228,16 @@ def draw_chart_visual(bodies_data, cusps):
         sep = math.radians(i*30)
         ax.plot([sep, sep], [1.15, 1.25], color='#FFD700')
 
-    # Gezegenler
     for name, sign, deg, sym in bodies_data:
         rad = math.radians(deg)
         color = '#FF4B4B' if name in ['ASC', 'MC'] else 'white'
         size = 14 if name in ['ASC', 'MC'] else 11
         ax.plot(rad, 1.05, 'o', color=color, markersize=size, markeredgecolor='#FFD700')
         ax.text(rad, 1.17, sym, color=color, fontsize=12, ha='center')
-    
     return fig
 
-# --- HESAPLAMA VE VERİ FORMATLAMA (HTML KUTUCUKLARI BURADA) ---
-def calculate_all(name, d_date, d_time, lat, lon):
+# --- ANA İŞLEM ---
+def calculate_all(name, d_date, d_time, lat, lon, transit_enabled, transit_date):
     try:
         local_dt = datetime.combine(d_date, d_time)
         tz = pytz.timezone('Europe/Istanbul')
@@ -158,56 +248,57 @@ def calculate_all(name, d_date, d_time, lat, lon):
         
         bodies = [('Güneş', ephem.Sun()), ('Ay', ephem.Moon()), ('Merkür', ephem.Mercury()), ('Venüs', ephem.Venus()), ('Mars', ephem.Mars()), ('Jüpiter', ephem.Jupiter()), ('Satürn', ephem.Saturn()), ('Uranüs', ephem.Uranus()), ('Neptün', ephem.Neptune()), ('Plüton', ephem.Pluto())]
         
-        # HTML Verisi (Kutucuklu)
-        info_html = f"<div class='metric-box'>🌍 <b>UTC Zamanı:</b> {utc_dt.strftime('%H:%M')}</div>"
-        
-        # AI Verisi (Düz Metin)
+        info_html = f"<div class='metric-box'>🌍 <b>Doğum (UTC):</b> {utc_dt.strftime('%H:%M')}</div>"
         ai_data = "SİSTEM: PLACIDUS\n"
         
-        # Grafik Verisi
         asc_sign = ZODIAC[int(cusps[1]/30)%12]
         mc_sign = ZODIAC[int(cusps[10]/30)%12]
         visual_data = [("ASC", asc_sign, cusps[1], "ASC"), ("MC", mc_sign, cusps[10], "MC")]
         
-        # Yükselen ve MC'yi listeye ekle
-        info_html += f"<div class='metric-box'>🚀 <b>Yükselen (ASC):</b> {asc_sign} {dec_to_dms(cusps[1]%30)}</div>"
-        info_html += f"<div class='metric-box'>👑 <b>Tepe Noktası (MC):</b> {mc_sign} {dec_to_dms(cusps[10]%30)}</div><br>"
-        
-        ai_data += f"YÜKSELEN: {asc_sign} {dec_to_dms(cusps[1]%30)}\nMC: {mc_sign}\n\nGEZEGENLER:\n"
+        info_html += f"<div class='metric-box'>🚀 <b>Yükselen:</b> {asc_sign}</div><br>"
+        ai_data += f"YÜKSELEN: {asc_sign}\nMC: {mc_sign}\n"
 
         for n, b in bodies:
             b.compute(obs)
             deg = math.degrees(ephem.Ecliptic(b).lon)
             sign_idx = int(deg/30)%12
-            sign = ZODIAC[sign_idx]
-            sign_sym = ZODIAC_SYMBOLS[sign_idx]
-            planet_sym = PLANET_SYMBOLS.get(n, "")
             h = get_house_of_planet(deg, cusps)
             dms = dec_to_dms(deg % 30)
             
-            # HTML KUTUCUK FORMATI (Burayı düzelttik)
-            info_html += f"<div class='metric-box'><b>{planet_sym} {n}</b>: {sign_sym} {sign} {dms} | <b>{h}. Ev</b></div>"
+            info_html += f"<div class='metric-box'><b>{n}</b>: {ZODIAC_SYMBOLS[sign_idx]} {ZODIAC[sign_idx]} {dms} | <b>{h}. Ev</b></div>"
+            ai_data += f"{n}: {ZODIAC[sign_idx]} {dms} ({h}. Ev)\n"
+            visual_data.append((n, ZODIAC[sign_idx], deg, PLANET_SYMBOLS.get(n, "")))
             
-            ai_data += f"{n}: {sign} {dms} ({h}. Ev)\n"
-            visual_data.append((n, sign, deg, planet_sym))
-            
-        return info_html, ai_data, visual_data, cusps, None
-    except Exception as e: return None, None, None, None, str(e)
+        aspects = calculate_aspects(visual_data)
+        ai_data += "\nNATAL AÇILAR:\n" + ", ".join(aspects)
+        
+        transit_html = ""
+        if transit_enabled:
+            tr_local = datetime.combine(transit_date, d_time)
+            tr_utc = tz.localize(tr_local).astimezone(pytz.utc)
+            tr_data, tr_hits = calculate_transits(visual_data, tr_utc, lat, lon)
+            ai_data += f"\n\nTRANSIT TARİHİ: {transit_date}\nTRANSIT ETKİLERİ:\n" + "\n".join(tr_hits)
+            transit_html = "<br><h4>⏳ Transit (Öngörü) Verileri</h4>"
+            for t_line in tr_hits:
+                transit_html += f"<div class='aspect-box'>✨ {t_line}</div>"
+
+        return info_html, ai_data, visual_data, cusps, aspects, transit_html, None
+    except Exception as e: return None, None, None, None, None, None, str(e)
 
 # --- PDF ---
-def create_pdf(name, info_str, ai_text):
+def create_pdf(name, info, ai_text):
     try:
         pdf = FPDF()
         pdf.add_page()
         pdf.set_font("Arial", 'B', 16); pdf.cell(0, 10, clean_text_for_pdf(f"ANALIZ: {name}"), ln=True, align='C')
-        pdf.set_font("Arial", '', 12); pdf.cell(0, 10, clean_text_for_pdf(info_str), ln=True, align='C')
+        pdf.set_font("Arial", '', 12); pdf.cell(0, 10, clean_text_for_pdf(info), ln=True, align='C')
         pdf.ln(5)
         pdf.set_font("Arial", 'B', 14); pdf.cell(0, 10, "YORUM", ln=True)
         pdf.set_font("Arial", '', 11); pdf.multi_cell(0, 8, clean_text_for_pdf(ai_text))
         return pdf.output(dest='S').encode('latin-1', 'ignore')
     except: return None
 
-# --- AKILLI AI ---
+# --- AI ---
 def get_ai_response_smart(prompt):
     try:
         list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
@@ -215,8 +306,7 @@ def get_ai_response_smart(prompt):
         target = "models/gemini-1.5-flash"
         if list_resp.status_code == 200:
             for m in list_resp.json().get('models', []):
-                if 'generateContent' in m.get('supportedGenerationMethods', []):
-                    target = m['name']; break
+                if 'generateContent' in m.get('supportedGenerationMethods', []): target = m['name']; break
         
         url = f"https://generativelanguage.googleapis.com/v1beta/{target}:generateContent?key={api_key}"
         headers = {'Content-Type': 'application/json'}
@@ -227,15 +317,21 @@ def get_ai_response_smart(prompt):
     except Exception as e: return str(e)
 
 # --- ARAYÜZ ---
-st.title("🌌 Astro-Analiz Pro")
+st.title("🌌 Astro-Analiz Pro (Güvenli Mod)")
+
+# EĞER ŞİFRE KONTROLÜ GEÇİLİRSE BURASI ÇALIŞIR
 with st.sidebar:
     st.header("Giriş Paneli")
     name = st.text_input("İsim", "Ziyaretçi")
-    d_date = st.date_input("Tarih", value=datetime(1980, 11, 26))
-    d_time = st.time_input("Saat", value=datetime.strptime("16:00", "%H:%M"))
-    
-    # ŞEHİR GERİ GELDİ
+    d_date = st.date_input("Doğum Tarihi", value=datetime(1980, 11, 26))
+    d_time = st.time_input("Doğum Saati", value=datetime.strptime("16:00", "%H:%M"))
     city = st.text_input("Şehir", "İstanbul")
+    
+    st.write("---")
+    transit_mode = st.checkbox("Transit (Öngörü) Modu Aç ⏳")
+    transit_date = datetime.now().date()
+    if transit_mode:
+        transit_date = st.date_input("Hedef Tarih", value=datetime.now())
     
     st.write("---")
     st.write("📍 **Hassas Koordinat**")
@@ -247,24 +343,31 @@ with st.sidebar:
     btn = st.button("Analiz Et ✨")
 
 if btn:
-    info_html, ai_data, vis_data, cusps, err = calculate_all(name, d_date, d_time, lat, lon)
+    info_html, ai_data, vis_data, cusps, aspects, transit_html, err = calculate_all(name, d_date, d_time, lat, lon, transit_mode, transit_date)
     
     if err: st.error(err)
     else:
-        tab1, tab2, tab3 = st.tabs(["📝 Yorum", "🗺️ Harita", "📊 Veri"])
+        tab1, tab2, tab3 = st.tabs(["📝 Yorum & Öngörü", "🗺️ Harita", "📊 Teknik Veriler"])
         
         with st.spinner("Kozmik veriler işleniyor..."):
-            ai_reply = get_ai_response_smart(f"Sen astrologsun. Kişi: {name}, {city}. Veriler:\n{ai_data}\nSoru: {q}\nYorumla.")
+            prompt_text = f"Sen uzman astrologsun. Kişi: {name}, {city}. Soru: {q}.\n\nVERİLER:\n{ai_data}\n\nGÖREV: Transit verisi varsa 'Öngörü' yap. Açılara dikkat et. Soruyu cevapla."
+            ai_reply = get_ai_response_smart(prompt_text)
         
         with tab1:
             st.markdown(ai_reply)
-            pdf = create_pdf(name, f"{d_date} {d_time} - {city}", ai_reply)
+            pdf = create_pdf(name, f"{d_date} - {city}", ai_reply)
             if pdf: st.download_button("PDF İndir", pdf, "analiz.pdf", "application/pdf")
             
         with tab2:
-            fig = draw_chart_visual(vis_data, cusps)
-            st.pyplot(fig)
+            st.pyplot(draw_chart_visual(vis_data, cusps))
             
         with tab3:
-            # HTML Olarak Render Et (Kutucuklu Görünüm İçin)
-            st.markdown(info_html, unsafe_allow_html=True)
+            c_a, c_b = st.columns(2)
+            with c_a:
+                st.markdown("### 🪐 Doğum Haritası")
+                st.markdown(info_html, unsafe_allow_html=True)
+            with c_b:
+                st.markdown("### 📐 Açılar")
+                for asp in aspects: st.markdown(f"<div class='aspect-box'>{asp}</div>", unsafe_allow_html=True)
+                if transit_mode:
+                    st.markdown(transit_html, unsafe_allow_html=True)
