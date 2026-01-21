@@ -14,6 +14,35 @@ from fpdf import FPDF
 # --- SAYFA AYARLARI ---
 st.set_page_config(page_title="Astro-Analiz Pro", layout="wide", page_icon="🔮")
 
+# --------------------------------------------------------------------------
+# 🔒 GÜVENLİK DUVARI (LOGIN)
+# --------------------------------------------------------------------------
+def check_password():
+    """Returns `True` if the user had a correct password."""
+    def password_entered():
+        if st.session_state["password"] == st.secrets["APP_PASSWORD"]:
+            st.session_state["password_correct"] = True
+            del st.session_state["password"]
+        else:
+            st.session_state["password_correct"] = False
+
+    if "password_correct" not in st.session_state:
+        st.session_state["password_correct"] = False
+
+    if st.session_state["password_correct"]:
+        return True
+
+    st.markdown("""<style>.stTextInput > label { display:none; }</style>""", unsafe_allow_html=True)
+    col1, col2, col3 = st.columns([1,2,1])
+    with col2:
+        st.warning("🔒 Bu uygulama özel erişim gerektirir.")
+        st.text_input("Lütfen Şifreyi Giriniz", type="password", on_change=password_entered, key="password", placeholder="Şifre...")
+        st.caption("Astro-Analiz Pro Güvenli Giriş Sistemi")
+    return False
+
+if not check_password():
+    st.stop()
+
 # --- CSS ---
 st.markdown("""
     <style>
@@ -93,6 +122,7 @@ def calculate_placidus_cusps(utc_dt, lat, lon):
     diff = (ic_deg - asc_deg) % 360
     cusps[2] = (asc_deg + diff/3) % 360
     cusps[3] = (asc_deg + 2*diff/3) % 360
+    
     cusps[5] = (cusps[11] + 180) % 360
     cusps[6] = (cusps[12] + 180) % 360
     cusps[8] = (cusps[2] + 180) % 360
@@ -130,43 +160,33 @@ def calculate_aspects(bodies, orb=8):
             if aspect_name: aspects.append(f"{p1_name} {aspect_name} {p2_name}")
     return aspects
 
-# --- TRANSIT (ZAMAN TÜNELİ) HESAPLAMA ---
+# --- TRANSIT ---
 def calculate_transit_range(birth_bodies, start_dt, end_dt, lat, lon):
     obs = ephem.Observer()
     obs.lat, obs.lon = str(lat), str(lon)
-    
-    # Sadece ağır gezegenlerin hareketine odaklanalım (Olay yaratanlar)
     heavy_planets = [('Jüpiter', ephem.Jupiter()), ('Satürn', ephem.Saturn()), ('Uranüs', ephem.Uranus()), ('Neptün', ephem.Neptune()), ('Plüton', ephem.Pluto())]
+    transit_report = []
+    transit_display = []
     
-    transit_report = [] # AI için rapor
-    transit_display = [] # Ekranda gösterim
-    
-    # Başlangıç ve Bitiş Pozisyonlarını Karşılaştır
     for n, b in heavy_planets:
-        # Başlangıç Konumu
         obs.date = start_dt
         b.compute(obs)
         deg_start = math.degrees(ephem.Ecliptic(b).lon)
         sign_start = ZODIAC[int(deg_start/30)%12]
         
-        # Bitiş Konumu
         obs.date = end_dt
         b.compute(obs)
         deg_end = math.degrees(ephem.Ecliptic(b).lon)
         sign_end = ZODIAC[int(deg_end/30)%12]
         
-        # Hareket Raporu
-        move_str = f"Transit {n}: {sign_start} -> {sign_end}"
-        transit_report.append(move_str)
+        transit_report.append(f"Transit {n}: {sign_start} -> {sign_end}")
         transit_display.append(f"<b>{n}:</b> {sign_start} {dec_to_dms(deg_start%30)} ➔ {sign_end} {dec_to_dms(deg_end%30)}")
 
-        # Natal Gezegenlere Temas (Kavuşum Kontrolü - Aralık Boyunca)
-        # Basitçe Başlangıç veya Bitiş anında temas var mı diye bakıyoruz
         for natal_n, _, natal_deg, _ in birth_bodies:
             for d_check in [deg_start, deg_end]:
                 diff = abs(d_check - natal_deg)
                 if diff > 180: diff = 360 - diff
-                if diff <= 4: # Geniş orb
+                if diff <= 4:
                     hit_msg = f"⚠️ {n}, Natal {natal_n} ile etkileşimde!"
                     if hit_msg not in transit_display: transit_display.append(hit_msg)
                     transit_report.append(f"Transit {n} natal {natal_n} ile temas ediyor.")
@@ -185,7 +205,6 @@ def draw_chart_visual(bodies_data, cusps):
     ax.set_yticklabels([]); ax.set_xticklabels([])
     ax.grid(False); ax.spines['polar'].set_visible(False)
 
-    # Evler
     for i in range(1, 13):
         angle = math.radians(cusps[i])
         ax.plot([angle, angle], [0, 1.2], color='#444', linewidth=1, linestyle='--')
@@ -194,7 +213,6 @@ def draw_chart_visual(bodies_data, cusps):
         mid = math.radians(cusps[i] + diff/2)
         ax.text(mid, 0.4, str(i), color='#888', ha='center', fontsize=11, fontweight='bold')
 
-    # Zodyak
     circles = np.linspace(0, 2*np.pi, 100)
     ax.plot(circles, [1.2]*100, color='#FFD700', linewidth=2)
     for i in range(12):
@@ -204,7 +222,6 @@ def draw_chart_visual(bodies_data, cusps):
         sep = math.radians(i*30)
         ax.plot([sep, sep], [1.15, 1.25], color='#FFD700')
 
-    # Gezegenler
     for name, sign, deg, sym in bodies_data:
         rad = math.radians(deg)
         color = '#FF4B4B' if name in ['ASC', 'MC'] else 'white'
@@ -216,7 +233,6 @@ def draw_chart_visual(bodies_data, cusps):
 # --- ANA İŞLEM ---
 def calculate_all(name, d_date, d_time, lat, lon, transit_enabled, start_date, end_date):
     try:
-        # Natal Hesaplama
         local_dt = datetime.combine(d_date, d_time)
         tz = pytz.timezone('Europe/Istanbul')
         utc_dt = tz.localize(local_dt).astimezone(pytz.utc)
@@ -252,16 +268,13 @@ def calculate_all(name, d_date, d_time, lat, lon, transit_enabled, start_date, e
         
         transit_html = ""
         if transit_enabled:
-            # Transit Hesaplama (Aralık)
             tr_start = datetime.combine(start_date, d_time)
             tr_end = datetime.combine(end_date, d_time)
             tr_utc_start = tz.localize(tr_start).astimezone(pytz.utc)
             tr_utc_end = tz.localize(tr_end).astimezone(pytz.utc)
             
             tr_ai_report, tr_display = calculate_transit_range(visual_data, tr_utc_start, tr_utc_end, lat, lon)
-            
             ai_data += f"\n\nTRANSIT DÖNEMİ: {start_date} - {end_date}\nGEZEGEN HAREKETLERİ:\n{tr_ai_report}"
-            
             transit_html = f"<br><h4>⏳ Transit Hareketleri ({start_date} - {end_date})</h4>"
             for t_line in tr_display:
                 transit_html += f"<div class='transit-box'>{t_line}</div>"
@@ -306,15 +319,14 @@ with st.sidebar:
     st.header("Giriş Paneli")
     name = st.text_input("İsim", "Ziyaretçi")
     d_date = st.date_input("Doğum Tarihi", value=datetime(1980, 11, 26))
-    d_time = st.time_input("Doğum Saati", value=datetime.strptime("16:00", "%H:%M"))
+    # STEP=60 İLE DAKİKALIK GİRİŞ AYARLANDI
+    d_time = st.time_input("Doğum Saati", value=datetime.strptime("16:00", "%H:%M"), step=60)
     city = st.text_input("Şehir", "İstanbul")
     
     st.write("---")
     transit_mode = st.checkbox("Transit (Öngörü) Modu Aç ⏳")
-    
-    # YENİ TARİH ARALIĞI SEÇİCİ
     start_date = datetime.now().date()
-    end_date = datetime.now().date() + timedelta(days=365) # Varsayılan 1 yıl
+    end_date = datetime.now().date() + timedelta(days=365)
     
     if transit_mode:
         st.caption("Öngörü Tarih Aralığı Seçiniz:")
@@ -338,7 +350,7 @@ if btn:
     else:
         tab1, tab2, tab3 = st.tabs(["📝 Yorum & Öngörü", "🗺️ Harita", "📊 Teknik Veriler"])
         
-        with st.spinner("Yıldızlar, Açılar ve Transitler hesaplanıyor..."):
+        with st.spinner("Kozmik veriler işleniyor..."):
             prompt_text = f"Sen uzman astrologsun. Kişi: {name}, {city}. Soru: {q}.\n\nVERİLER:\n{ai_data}\n\nGÖREV: Eğer Transit verisi varsa seçilen tarih aralığı ({start_date} - {end_date}) için 'Öngörü' yap. Gezegen hareketlerini (burç değişimlerini) dikkate al. Soruyu cevapla."
             ai_reply = get_ai_response_smart(prompt_text)
         
