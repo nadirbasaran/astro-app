@@ -169,50 +169,53 @@ def calculate_chart_precise(name, d_date, d_time, lat_deg, lat_min, lon_deg, lon
         return info_text, chart_data_for_ai, visual_data, cusps, None
     except Exception as e: return None, None, None, {}, str(e)
 
-# --- HARİTA ÇİZİMİ (DÜZELTİLMİŞ ORYANTASYON) ---
+# --- HARİTA ÇİZİMİ (KESİN DÜZELTME: SAAT YÖNÜ TERSİ) ---
 def draw_chart_visual(bodies_data, cusps):
     fig = plt.figure(figsize=(10, 10), facecolor='#0e1117')
     ax = fig.add_subplot(111, projection='polar')
     ax.set_facecolor('#1a1c24')
     
-    # --- KRİTİK DÜZELTME: DOĞAL ZODYAK ---
-    # 0 Derece (Koç Başlangıcı) Saat 9 yönünde (Batı/West) sabitlenir.
+    # --- AYARLAR ---
+    # 0 Derece (Koç) Saat 9 yönü (Batı)
     ax.set_theta_zero_location("W")
-    # Saat yönünün tersine (Counter-Clockwise) artar.
-    ax.set_theta_direction(-1) 
-    # Haritayı Yükselen'e göre DÖNDÜRMÜYORUZ. Arka plan sabit.
+    
+    # DÜZELTME: 1 = Counter-Clockwise (Saat Yönünün Tersi)
+    # Bu sayede 0'dan 30'a giderken Aşağıya doğru iner (9 -> 8)
+    ax.set_theta_direction(1) 
 
     ax.set_yticklabels([])
     ax.set_xticklabels([])
     ax.grid(False)
     ax.spines['polar'].set_visible(False)
 
-    # Ev Çizgileri (Placidus Dilimleri - Sabit Zemin Üzerine)
+    # Ev Çizgileri
     for i in range(1, 13):
         angle_rad = math.radians(cusps[i])
-        # Ev çizgileri
         ax.plot([angle_rad, angle_rad], [0, 1.2], color='#333', linewidth=1, linestyle='--')
         
         # Ev Numarası
         next_cusp = cusps[i+1] if i < 12 else cusps[1]
-        if next_cusp < cusps[i]: next_cusp += 360
-        mid_angle = math.radians((cusps[i] + next_cusp) / 2)
-        # Numaraları merkeze daha yakın koyalım
+        
+        # Açı farkı hesapla (CCW yönünde)
+        diff = next_cusp - cusps[i]
+        if diff < 0: diff += 360 # 360 döngüsünü düzelt
+        
+        mid_angle = math.radians(cusps[i] + diff/2)
         ax.text(mid_angle, 0.4, str(i), color='#777', fontsize=12, fontweight='bold', ha='center', va='center')
 
-    # Dış Halka (Zodyak)
+    # Dış Halka
     circles = np.linspace(0, 2*np.pi, 100)
     ax.plot(circles, [1.2]*100, color='#FFD700', linewidth=2)
     
-    # Burç Sembolleri (Sabit 30'ar derece, Koç 9'da başlayacak şekilde)
+    # Burç Sembolleri
     for i in range(12):
+        # 30 derecelik dilimlerin ortası
         angle_deg = i * 30 + 15
         angle_rad = math.radians(angle_deg)
         
-        # Metin rotasyonu (okunabilirlik için)
-        rotation = angle_deg + 15
-        if 90 < rotation < 270: rotation += 180
-
+        # CCW modunda metin rotasyonu
+        rotation = angle_deg - 90 # Metni merkeze dik yap
+        
         ax.text(angle_rad, 1.3, ZODIAC_SYMBOLS[i], ha='center', va='center', 
                 color='#FFD700', fontsize=16, fontweight='bold', rotation=rotation)
         
@@ -224,12 +227,11 @@ def draw_chart_visual(bodies_data, cusps):
         angle_rad = math.radians(deg_total)
         color = '#FF4B4B' if name in ['ASC', 'MC'] else 'white'
         size = 14 if name in ['ASC', 'MC'] else 12
-        
-        # Gezegenleri biraz daha dışa, sembolleri belirgin koyalım
         r_pos = 1.05
         
         ax.plot(angle_rad, r_pos, 'o', color=color, markersize=size, markeredgecolor='#FFD700', markeredgewidth=1.5, alpha=0.8)
-        # Sembolü halkanın hemen dışına koy
+        
+        # Metni radyal olarak hizala
         ax.text(angle_rad, 1.15, f"{planet_sym}", color=color, fontsize=14, fontweight='bold', ha='center', va='center')
     
     return fig
