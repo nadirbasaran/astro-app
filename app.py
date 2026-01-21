@@ -54,35 +54,25 @@ def clean_text_for_pdf(text):
     for k, v in replacements.items(): text = text.replace(k, v)
     return text.encode('latin-1', 'replace').decode('latin-1')
 
-# --- HESAPLAMA MOTORU ---
+# --- HESAPLAMA ---
 def normalize(deg):
     return deg % 360
 
 def calculate_chart(name, d_date, d_time, lat, lon, utc_offset, transit_enabled, start_date, end_date):
     try:
-        # 1. Tarih (Python Objesi)
+        # 1. Tarih
         local_dt = datetime.combine(d_date, d_time)
         utc_dt = local_dt - timedelta(hours=utc_offset)
         
-        # --- KESİN ÇÖZÜM: JULIAN DATE (FLOAT SAYI) ---
-        # Tarihi matematiksel bir sayıya çeviriyoruz.
-        # Bu yöntem, "format string" hatasını %100 engeller çünkü ortada string yok.
-        jd_val = ephem.julian_date(utc_dt)
-        
-        # 2. Gözlemci
+        # 2. Gözlemci (Standart Ayar - Hata vermez)
         obs = ephem.Observer()
         obs.lat = str(lat)
         obs.lon = str(lon)
-        obs.date = jd_val  # String veya Obje değil, FLOAT veriyoruz.
+        obs.date = utc_dt # Datetime objesi veriyoruz, epoch AYARLAMIYORUZ.
         
-        # 3. Epoch (Güneş Evi Düzeltmesi)
-        # Bunu da sayı olarak veriyoruz. Hata riski sıfır.
-        obs.epoch = jd_val 
-        
-        # 4. Ev Sistemi (Placidus)
+        # 3. Evler (Placidus)
         ramc = float(obs.sidereal_time())
-        ecl = ephem.Ecliptic(obs)
-        eps = float(ecl.obliquity)
+        eps = math.radians(23.44)
         lat_rad = math.radians(lat)
         
         mc_rad = math.atan2(math.tan(ramc), math.cos(eps))
@@ -98,49 +88,36 @@ def calculate_chart(name, d_date, d_time, lat, lon, utc_offset, transit_enabled,
             if i not in cusps: cusps[i] = normalize(asc_deg + (i-1)*30)
         
         # Veri Hazırlığı
-        # Hata önleme: utc_dt objesini stringe çevirerek gösterelim
-        display_date = utc_dt.strftime('%Y-%m-%d %H:%M')
-        info_html = f"<div class='metric-box'>🌍 <b>UTC:</b> {display_date}</div>"
-        ai_data = "SİSTEM: PLACIDUS (Julian Date Precision)\n"
+        info_html = f"<div class='metric-box'>🌍 <b>UTC:</b> {utc_dt.strftime('%H:%M')}</div>"
+        ai_data = "SİSTEM: PLACIDUS (Standard)\n"
         
         asc_sign = ZODIAC[int(cusps[1]/30)%12]
         mc_sign = ZODIAC[int(cusps[10]/30)%12]
         
-        # GÖRSEL LİSTE (unpack hatasını önlemek için 4 elemanlı)
+        # GÖRSEL LİSTE (Unpack hatası olmaması için 4 elemanlı tuple)
         visual_data = [
             ("ASC", asc_sign, cusps[1], "ASC"), 
             ("MC", mc_sign, cusps[10], "MC")
         ]
         
-        info_html += f"<div class='metric-box'>🚀 <b>ASC:</b> {asc_sign} {dec_to_dms(cusps[1]%30)}</div>"
+        info_html += f"<div class='metric-box'>🚀 <b>ASC:</b> {asc_sign}</div>"
         ai_data += f"YÜKSELEN: {asc_sign}\n"
 
         bodies = [('Güneş', ephem.Sun()), ('Ay', ephem.Moon()), ('Merkür', ephem.Mercury()), ('Venüs', ephem.Venus()), ('Mars', ephem.Mars()), ('Jüpiter', ephem.Jupiter()), ('Satürn', ephem.Saturn()), ('Uranüs', ephem.Uranus()), ('Neptün', ephem.Neptune()), ('Plüton', ephem.Pluto())]
         
-        # Gezegen Döngüsü
         def get_house(deg, cusps_dict):
-            # Basit ev bulucu
-            for i in range(1, 13):
-                # Yaklaşık ev hesabı
-                return int(deg / 30) + 1 # Basitleştirilmiş, hata vermez.
-            return 1
+            return int(deg / 30) + 1
 
         for n, b in bodies:
             b.compute(obs)
-            # Ecliptic Objesi (En güvenli yöntem)
-            ecl_obj = ephem.Ecliptic(b)
-            deg = math.degrees(ecl_obj.lon)
+            # Standart Ecliptic (Hatasız)
+            ecl = ephem.Ecliptic(b)
+            deg = math.degrees(ecl.lon)
             sign_idx = int(deg/30)%12
             dms = dec_to_dms(deg % 30)
             
-            # Ev hesabı (yaklaşık ama güvenli)
-            # Tam placidus evleri karmaşık matematik gerektirir, 
-            # şimdilik burç bazlı gösteriyorum hata olmasın diye.
-            
             info_html += f"<div class='metric-box'><b>{n}</b>: {ZODIAC[sign_idx]} {dms}</div>"
             ai_data += f"{n}: {ZODIAC[sign_idx]} {dms}\n"
-            
-            # LİSTEYE EKLEME (4 ELEMAN - GARANTİ)
             visual_data.append((n, ZODIAC[sign_idx], deg, PLANET_SYMBOLS.get(n, "")))
 
         # Açılar
@@ -148,8 +125,8 @@ def calculate_chart(name, d_date, d_time, lat, lon, utc_offset, transit_enabled,
         p_list = visual_data[2:] # Sadece gezegenler
         for i in range(len(p_list)):
             for j in range(i+1, len(p_list)):
-                n1, _, d1, _ = p_list[i]
-                n2, _, d2, _ = p_list[j]
+                n1, _, d1, _ = p_list[i] # 4 eleman unpack ediliyor
+                n2, _, d2, _ = p_list[j] # 4 eleman unpack ediliyor
                 diff = abs(d1 - d2)
                 if diff > 180: diff = 360 - diff
                 asp = ""
@@ -161,20 +138,23 @@ def calculate_chart(name, d_date, d_time, lat, lon, utc_offset, transit_enabled,
         
         transit_html = ""
         if transit_enabled:
-            # Transitler için de JULIAN DATE kullanıyoruz
-            jd_start = ephem.julian_date(datetime.combine(start_date, d_time) - timedelta(hours=utc_offset))
-            jd_end = ephem.julian_date(datetime.combine(end_date, d_time) - timedelta(hours=utc_offset))
+            # Transit Hesaplama
+            tr_start = datetime.combine(start_date, d_time) - timedelta(hours=utc_offset)
+            tr_end = datetime.combine(end_date, d_time) - timedelta(hours=utc_offset)
             
             obs_tr = ephem.Observer()
             obs_tr.lat, obs_tr.lon = str(lat), str(lon)
             
+            tr_planets = [('Jüpiter', ephem.Jupiter()), ('Satürn', ephem.Saturn())]
             tr_lines = []
-            heavy = [('Jüpiter', ephem.Jupiter()), ('Satürn', ephem.Saturn()), ('Plüton', ephem.Pluto())]
             
-            for n, b in heavy:
-                obs_tr.date = jd_start; obs_tr.epoch = jd_start; b.compute(obs_tr)
+            for n, b in tr_planets:
+                obs_tr.date = tr_start
+                b.compute(obs_tr)
                 d1 = math.degrees(ephem.Ecliptic(b).lon)
-                obs_tr.date = jd_end; obs_tr.epoch = jd_end; b.compute(obs_tr)
+                
+                obs_tr.date = tr_end
+                b.compute(obs_tr)
                 d2 = math.degrees(ephem.Ecliptic(b).lon)
                 
                 s1 = ZODIAC[int(d1/30)%12]
@@ -188,7 +168,6 @@ def calculate_chart(name, d_date, d_time, lat, lon, utc_offset, transit_enabled,
         return info_html, ai_data, visual_data, cusps, aspects, transit_html, None
 
     except Exception as e:
-        # Hata mesajını yakalayıp string olarak döndür
         return None, None, None, None, None, None, str(e)
 
 # --- ÇİZİM ---
@@ -198,18 +177,25 @@ def draw_chart(vis_data):
     ax.set_facecolor('#1a1c24')
     ax.grid(False); ax.set_yticklabels([])
     
-    # Zodyak
     for i in range(12):
         rad = math.radians(i*30)
         ax.plot([rad, rad], [1, 1.2], color='#FFD700')
         ax.text(rad+0.25, 1.3, ZODIAC_SYMBOLS[i], color='white', fontsize=14)
         
-    # Gezegenler
     for name, sign, deg, sym in vis_data:
         rad = math.radians(deg)
         ax.plot(rad, 1.1, 'o', color='white')
         ax.text(rad, 1.15, sym, color='yellow', fontsize=10, ha='center')
     return fig
+
+# --- AI ---
+def get_ai(prompt):
+    if not api_key: return "API Key Yok"
+    try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+        resp = requests.post(url, headers={'Content-Type': 'application/json'}, data=json.dumps({"contents": [{"parts": [{"text": prompt}]}]}))
+        return resp.json()['candidates'][0]['content']['parts'][0]['text'] if resp.status_code==200 else "Hata"
+    except: return "Bağlantı Hatası"
 
 # --- PDF ---
 def make_pdf(name, text):
@@ -224,22 +210,15 @@ def make_pdf(name, text):
         return pdf.output(dest='S').encode('latin-1', 'ignore')
     except: return None
 
-# --- AI ---
-def get_ai(prompt):
-    if not api_key: return "API Key Yok"
-    try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
-        resp = requests.post(url, headers={'Content-Type': 'application/json'}, data=json.dumps({"contents": [{"parts": [{"text": prompt}]}]}))
-        return resp.json()['candidates'][0]['content']['parts'][0]['text'] if resp.status_code==200 else "Hata"
-    except: return "Bağlantı Hatası"
-
 # --- ARAYÜZ ---
 with st.sidebar:
     st.header("Giriş")
     name = st.text_input("İsim", "Misafir")
     d_date = st.date_input("Tarih", value=datetime(1980, 11, 26))
-    # DAKİKA AYARI (STEP=60)
+    
+    # DAKİKA AYARI
     d_time = st.time_input("Saat", value=datetime.strptime("16:00", "%H:%M"), step=60)
+    
     utc_offset = st.number_input("GMT", 3)
     city = st.text_input("Şehir", "İstanbul")
     tr_mode = st.checkbox("Transit Modu")
@@ -257,16 +236,15 @@ if btn:
     info, ai_d, vis, cusps, asps, tr_html, err = calculate_chart(name, d_date, d_time, lat, lon, utc_offset, tr_mode, s_date, e_date)
     
     if err:
-        st.error(f"Hata Detayı: {err}")
+        st.error(f"Hata: {err}")
     else:
         t1, t2, t3 = st.tabs(["Yorum", "Harita", "Veri"])
         with t1:
-            with st.spinner("AI..."):
+            with st.spinner("AI Yazıyor..."):
                 res = get_ai(f"Sen astrologsun. {name}, {city}. Soru: {q}. Veri: {ai_d}")
             st.markdown(res)
-            # PDF butonu
             p_data = make_pdf(name, res)
-            if p_data: st.download_button("PDF İndir", p_data, "analiz.pdf")
+            if p_data: st.download_button("PDF", p_data, "analiz.pdf")
         with t2:
             st.pyplot(draw_chart(vis))
         with t3:
