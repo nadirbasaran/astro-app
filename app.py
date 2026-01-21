@@ -306,7 +306,10 @@ with st.sidebar:
     st.header("Giriş Paneli")
     name = st.text_input("İsim", "Ziyaretçi")
     d_date = st.date_input("Doğum Tarihi", value=datetime(1980, 11, 26))
-    d_time = st.time_input("Doğum Saati", value=datetime.strptime("16:00", "%H:%M"))
+    
+    # --- DÜZELTME BURADA: step=60 EKLENDİ ---
+    d_time = st.time_input("Doğum Saati", value=datetime.strptime("16:00", "%H:%M"), step=60)
+    
     city = st.text_input("Şehir", "İstanbul")
     
     st.write("---")
