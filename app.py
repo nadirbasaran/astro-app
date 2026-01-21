@@ -1,6 +1,6 @@
 import streamlit as st
 import matplotlib
-matplotlib.use('Agg') # Grafik motorunu sabitler (Siyah ekran hatasını önler)
+matplotlib.use('Agg') # Grafik hatasını önler
 import matplotlib.pyplot as plt
 import ephem
 import math
@@ -44,7 +44,7 @@ def dec_to_dms(deg):
     return f"{d:02d}° {m:02d}'"
 
 def clean_text_for_pdf(text):
-    # Türkçe karakterleri İngilizceye çevir (PDF çökmesini önler)
+    # Türkçe karakterleri İngilizce karşılıklarına çevir (PDF çökmemesi için)
     replacements = {'ğ':'g', 'Ğ':'G', 'ş':'s', 'Ş':'S', 'ı':'i', 'İ':'I', 'ü':'u', 'Ü':'U', 'ö':'o', 'Ö':'O', 'ç':'c', 'Ç':'C', '–':'-', '’':"'", '“':'"', '”':'"', '…':'...'}
     for k, v in replacements.items(): text = text.replace(k, v)
     return text.encode('latin-1', 'replace').decode('latin-1')
@@ -59,8 +59,9 @@ def calculate_chart(name, d_date, d_time, lat, lon, utc_offset, transit_enabled,
         local_dt = datetime.combine(d_date, d_time)
         utc_dt = local_dt - timedelta(hours=utc_offset)
         
-        # --- KESİN ÇÖZÜM: Tarihi String (Metin) olarak veriyoruz ---
-        # Bu, "not enough arguments for format string" hatasını %100 çözer.
+        # --- KESİN ÇÖZÜM: TARİHİ STRING (METİN) OLARAK VERİYORUZ ---
+        # Bu sayede "format string" hatası oluşamaz.
+        # Format: 'YYYY/MM/DD HH:MM:SS'
         date_str = utc_dt.strftime('%Y/%m/%d %H:%M:%S')
         
         # 2. Gözlemci (Observer)
@@ -70,6 +71,7 @@ def calculate_chart(name, d_date, d_time, lat, lon, utc_offset, transit_enabled,
         obs.date = date_str
         
         # KRİTİK: Güneş'i 7. Eve oturtan ayar (Epoch = Doğum Anı)
+        # Bunu da string olarak veriyoruz.
         obs.epoch = date_str
         
         # 3. Ev Sistemi (Placidus & Eğim)
@@ -131,7 +133,7 @@ def calculate_chart(name, d_date, d_time, lat, lon, utc_offset, transit_enabled,
 
         for n, b in bodies:
             b.compute(obs)
-            # Standart Ecliptic Longitude Hesabı (Hatasız)
+            # Standart Ecliptic Longitude Hesabı
             ecl_obj = ephem.Ecliptic(b)
             deg = math.degrees(ecl_obj.lon)
             
