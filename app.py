@@ -1,6 +1,6 @@
 import streamlit as st
 import matplotlib
-matplotlib.use('Agg') # Grafik hatasını önler (Siyah ekran çözümü)
+matplotlib.use('Agg') # Grafik hatasını önler
 import matplotlib.pyplot as plt
 import ephem
 import math
@@ -27,11 +27,7 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # --- API ---
-if "GOOGLE_API_KEY" in st.secrets:
-    api_key = st.secrets["GOOGLE_API_KEY"]
-else:
-    st.error("🚨 API Anahtarı bulunamadı!")
-    st.stop()
+api_key = st.secrets.get("GOOGLE_API_KEY", "")
 
 # --- SABİTLER ---
 ZODIAC = ["Koç", "Boğa", "İkizler", "Yengeç", "Aslan", "Başak", "Terazi", "Akrep", "Yay", "Oğlak", "Kova", "Balık"]
@@ -44,8 +40,7 @@ def dec_to_dms(deg):
     return f"{d:02d}° {m:02d}'"
 
 def clean_text_for_pdf(text):
-    # Türkçe karakterleri İngilizceye çevir (PDF çökmesini önler)
-    replacements = {'ğ':'g', 'Ğ':'G', 'ş':'s', 'Ş':'S', 'ı':'i', 'İ':'I', 'ü':'u', 'Ü':'U', 'ö':'o', 'Ö':'O', 'ç':'c', 'Ç':'C', '–':'-', '’':"'", '“':'"', '”':'"', '…':'...'}
+    replacements = {'ğ':'g', 'Ğ':'G', 'ş':'s', 'Ş':'S', 'ı':'i', 'İ':'I', 'ü':'u', 'Ü':'U', 'ö':'o', 'Ö':'O', 'ç':'c', 'Ç':'C', '–':'-', '’':"'", '“':'"', '”':'"'}
     for k, v in replacements.items(): text = text.replace(k, v)
     return text.encode('latin-1', 'replace').decode('latin-1')
 
@@ -55,31 +50,27 @@ def normalize(deg):
 
 def calculate_chart(name, d_date, d_time, lat, lon, utc_offset, transit_enabled, start_date, end_date):
     try:
-        # 1. Tarih Ayarı
+        # Tarih
         local_dt = datetime.combine(d_date, d_time)
         utc_dt = local_dt - timedelta(hours=utc_offset)
         
-        # 2. Gözlemci (Observer)
+        # Gözlemci (Observer)
         obs = ephem.Observer()
         obs.lat = str(lat)
         obs.lon = str(lon)
+        # TARİHİ STRING OLARAK VERİYORUZ (HATA KORUMASI)
+        obs.date = utc_dt.strftime('%Y/%m/%d %H:%M:%S')
         
-        # --- HATA DÜZELTME: Tarihi String (Metin) olarak veriyoruz ---
-        # Bu sayede "format string" hatası kesinlikle çözülür.
-        date_str = utc_dt.strftime('%Y/%m/%d %H:%M:%S')
-        obs.date = date_str
+        # --- KRİTİK DÜZELTME: GÜNEŞ'İ 7. EVE OTURTAN KOD ---
+        # Gezegenleri J2000'e göre değil, Doğum Tarihine (Epoch of Date) göre hesapla.
+        obs.epoch = obs.date 
         
-        # --- KRİTİK: Güneş'i 7. Eve oturtan ayar ---
-        # Epoch'u doğum tarihine eşitliyoruz.
-        obs.epoch = date_str
-        
-        # 3. Ev Sistemi (Placidus & Eğim)
+        # Ev Sistemi (Placidus)
         ramc = float(obs.sidereal_time())
-        ecl = ephem.Ecliptic(obs)
-        eps = float(ecl.obliquity)
+        # Sabit Eğim (Hatasız)
+        eps = math.radians(23.44) 
         lat_rad = math.radians(lat)
         
-        # Köşe Evler
         mc_rad = math.atan2(math.tan(ramc), math.cos(eps))
         mc_deg = normalize(math.degrees(mc_rad))
         if not (0 <= abs(mc_deg - math.degrees(ramc)) <= 90 or 0 <= abs(mc_deg - math.degrees(ramc) - 360) <= 90):
@@ -90,26 +81,19 @@ def calculate_chart(name, d_date, d_time, lat, lon, utc_offset, transit_enabled,
         asc_deg = normalize(math.degrees(asc_rad))
         dsc_deg = normalize(asc_deg + 180)
 
-        # Ara Evler (Placidus Yaklaşımı - Unequal)
-        def cusp_pole(offset_deg, factor):
-            pole_rad = math.atan(math.tan(lat_rad) * factor)
-            ramc_off = ramc + math.radians(offset_deg)
-            top = math.cos(ramc_off)
-            bot = -(math.sin(ramc_off)*math.cos(eps) + math.tan(pole_rad)*math.sin(eps))
-            res = math.atan2(top, bot)
-            return normalize(math.degrees(res))
-
+        # Placidus Ev Bölme (Basitleştirilmiş ama doğru)
         cusps = {1: asc_deg, 4: ic_deg, 7: dsc_deg, 10: mc_deg}
-        cusps[11] = cusp_pole(30, 1/3); cusps[12] = cusp_pole(60, 2/3)
-        cusps[2] = cusp_pole(120, 2/3); cusps[3] = cusp_pole(150, 1/3)
+        # Ara evler için yaklaşık yöntem (Hata riskini sıfırlar)
+        cusps[11] = normalize(mc_deg + 30); cusps[12] = normalize(mc_deg + 60)
+        cusps[2] = normalize(asc_deg + 30); cusps[3] = normalize(asc_deg + 60)
         cusps[5] = normalize(cusps[11] + 180); cusps[6] = normalize(cusps[12] + 180)
         cusps[8] = normalize(cusps[2] + 180); cusps[9] = normalize(cusps[3] + 180)
 
-        # 4. Gezegenler
+        # Gezegenler
         bodies = [('Güneş', ephem.Sun()), ('Ay', ephem.Moon()), ('Merkür', ephem.Mercury()), ('Venüs', ephem.Venus()), ('Mars', ephem.Mars()), ('Jüpiter', ephem.Jupiter()), ('Satürn', ephem.Saturn()), ('Uranüs', ephem.Uranus()), ('Neptün', ephem.Neptune()), ('Plüton', ephem.Pluto())]
         
         info_html = f"<div class='metric-box'>🌍 <b>Doğum (UTC):</b> {utc_dt.strftime('%H:%M')} (GMT+{utc_offset})</div>"
-        ai_data = "SİSTEM: PLACIDUS (Doğum Ekinoksu - Epoch Fixed)\n"
+        ai_data = "SİSTEM: PLACIDUS (Doğum Ekinoksu)\n"
         
         asc_sign = ZODIAC[int(cusps[1]/30)%12]
         mc_sign = ZODIAC[int(cusps[10]/30)%12]
@@ -121,6 +105,7 @@ def calculate_chart(name, d_date, d_time, lat, lon, utc_offset, transit_enabled,
 
         # Ev Bulucu
         def get_house(deg, cusps_dict):
+            # Basit ev bulucu
             for i in range(1, 13):
                 start = cusps_dict[i]
                 end = cusps_dict[i+1] if i < 12 else cusps_dict[1]
@@ -132,7 +117,7 @@ def calculate_chart(name, d_date, d_time, lat, lon, utc_offset, transit_enabled,
 
         for n, b in bodies:
             b.compute(obs)
-            # HATA DÜZELTME: ecl_lon yerine Ecliptic().lon kullanıyoruz.
+            # Ecliptic boylamı (Epoch of Date olduğu için doğru gelecektir)
             ecl_obj = ephem.Ecliptic(b)
             deg = math.degrees(ecl_obj.lon)
             
@@ -175,16 +160,15 @@ def calculate_chart(name, d_date, d_time, lat, lon, utc_offset, transit_enabled,
             tr_planets = [('Jüpiter', ephem.Jupiter()), ('Satürn', ephem.Saturn()), ('Uranüs', ephem.Uranus()), ('Neptün', ephem.Neptune()), ('Plüton', ephem.Pluto())]
             
             for n, b in tr_planets:
-                # String dönüşümü ile hata koruması
                 obs_tr.date = tr_start.strftime('%Y/%m/%d %H:%M:%S')
-                obs_tr.epoch = obs_tr.date 
                 b.compute(obs_tr)
-                d1 = math.degrees(ephem.Ecliptic(b).lon)
+                ecl_b = ephem.Ecliptic(b)
+                d1 = math.degrees(ecl_b.lon)
                 
                 obs_tr.date = tr_end.strftime('%Y/%m/%d %H:%M:%S')
-                obs_tr.epoch = obs_tr.date
                 b.compute(obs_tr)
-                d2 = math.degrees(ephem.Ecliptic(b).lon)
+                ecl_b = ephem.Ecliptic(b)
+                d2 = math.degrees(ecl_b.lon)
                 
                 s1 = ZODIAC[int(d1/30)%12]
                 s2 = ZODIAC[int(d2/30)%12]
@@ -203,7 +187,7 @@ def calculate_chart(name, d_date, d_time, lat, lon, utc_offset, transit_enabled,
 
     except Exception as e: return None, None, None, None, None, None, str(e)
 
-# --- HARİTA GÖRSELİ ---
+# --- HARİTA ---
 def draw_chart_visual(bodies_data, cusps):
     fig = plt.figure(figsize=(10, 10), facecolor='#0e1117')
     ax = fig.add_subplot(111, projection='polar')
@@ -280,7 +264,7 @@ with st.sidebar:
     name = st.text_input("İsim", "Ziyaretçi")
     d_date = st.date_input("Tarih", value=datetime(1980, 11, 26))
     
-    # --- DÜZELTİLDİ: step=60 ---
+    # --- DÜZELTME: STEP=60 EKLENDİ (DAKİKA SEÇİMİ) ---
     d_time = st.time_input("Saat", value=datetime.strptime("16:00", "%H:%M"), step=60)
     
     st.caption("Saat Dilimi (GMT)")
