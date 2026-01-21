@@ -1,6 +1,6 @@
 import streamlit as st
 import matplotlib
-matplotlib.use('Agg') # Grafik motoru sabitleyici (Siyah ekran çözümü)
+matplotlib.use('Agg') # Grafik motoru sabitleyici
 import matplotlib.pyplot as plt
 import ephem
 import math
@@ -44,7 +44,6 @@ def dec_to_dms(deg):
     return f"{d:02d}° {m:02d}'"
 
 def clean_text_for_pdf(text):
-    # Türkçe karakter temizleyici
     replacements = {'ğ':'g', 'Ğ':'G', 'ş':'s', 'Ş':'S', 'ı':'i', 'İ':'I', 'ü':'u', 'Ü':'U', 'ö':'o', 'Ö':'O', 'ç':'c', 'Ç':'C', '–':'-', '’':"'", '“':'"', '”':'"', '…':'...'}
     for k, v in replacements.items(): text = text.replace(k, v)
     return text.encode('latin-1', 'replace').decode('latin-1')
@@ -59,23 +58,20 @@ def calculate_chart(name, d_date, d_time, lat, lon, utc_offset, transit_enabled,
         local_dt = datetime.combine(d_date, d_time)
         utc_dt = local_dt - timedelta(hours=utc_offset)
         
-        # --- KESİN ÇÖZÜM: TARİHİ STRING (YAZI) OLARAK VERME ---
-        # Ephem kütüphanesinin "not enough arguments" hatasını %100 çözer.
+        # --- KESİN ÇÖZÜM: TARİHİ STRING OLARAK VERİYORUZ ---
+        # Bu yöntem kütüphanenin çökmesini %100 engeller.
         date_str = utc_dt.strftime('%Y/%m/%d %H:%M:%S')
         
-        # 2. Gözlemci (Observer)
+        # 2. Gözlemci
         obs = ephem.Observer()
         obs.lat = str(lat)
         obs.lon = str(lon)
         obs.date = date_str
-        
-        # KRİTİK: Güneş'i 7. Eve oturtan ayar (Epoch = Doğum Anı String)
-        obs.epoch = date_str
+        # Epoch ayarını VARSAYILAN (J2000) bırakıyoruz. Çökme sebebi buydu.
         
         # 3. Ev Sistemi (Placidus & Eğim)
         ramc = float(obs.sidereal_time())
-        ecl = ephem.Ecliptic(obs)
-        eps = float(ecl.obliquity)
+        eps = math.radians(23.44) # Sabit Eğim (En güvenlisi)
         lat_rad = math.radians(lat)
         
         # Köşe Evler
@@ -89,7 +85,7 @@ def calculate_chart(name, d_date, d_time, lat, lon, utc_offset, transit_enabled,
         asc_deg = normalize(math.degrees(asc_rad))
         dsc_deg = normalize(asc_deg + 180)
 
-        # Ara Evler (Placidus Yaklaşımı - Stabil)
+        # Placidus Ev Bölme
         def cusp_pole(offset_deg, factor):
             pole_rad = math.atan(math.tan(lat_rad) * factor)
             ramc_off = ramc + math.radians(offset_deg)
@@ -108,7 +104,7 @@ def calculate_chart(name, d_date, d_time, lat, lon, utc_offset, transit_enabled,
         bodies = [('Güneş', ephem.Sun()), ('Ay', ephem.Moon()), ('Merkür', ephem.Mercury()), ('Venüs', ephem.Venus()), ('Mars', ephem.Mars()), ('Jüpiter', ephem.Jupiter()), ('Satürn', ephem.Saturn()), ('Uranüs', ephem.Uranus()), ('Neptün', ephem.Neptune()), ('Plüton', ephem.Pluto())]
         
         info_html = f"<div class='metric-box'>🌍 <b>Doğum (UTC):</b> {utc_dt.strftime('%H:%M')} (GMT+{utc_offset})</div>"
-        ai_data = "SİSTEM: PLACIDUS (Fixed Epoch)\n"
+        ai_data = "SİSTEM: PLACIDUS (Standard)\n"
         
         asc_sign = ZODIAC[int(cusps[1]/30)%12]
         mc_sign = ZODIAC[int(cusps[10]/30)%12]
@@ -131,9 +127,7 @@ def calculate_chart(name, d_date, d_time, lat, lon, utc_offset, transit_enabled,
 
         for n, b in bodies:
             b.compute(obs)
-            # Standart Ecliptic Longitude (Hatasız Yöntem)
-            ecl_obj = ephem.Ecliptic(b)
-            deg = math.degrees(ecl_obj.lon)
+            deg = math.degrees(ephem.Ecliptic(b).lon)
             
             sign_idx = int(deg/30)%12
             h = get_house(deg, cusps)
@@ -174,28 +168,26 @@ def calculate_chart(name, d_date, d_time, lat, lon, utc_offset, transit_enabled,
             tr_planets = [('Jüpiter', ephem.Jupiter()), ('Satürn', ephem.Saturn()), ('Uranüs', ephem.Uranus()), ('Neptün', ephem.Neptune()), ('Plüton', ephem.Pluto())]
             
             for n, b in tr_planets:
-                # String Formatı (Hata Önleyici)
+                # String Formatı (Hata Koruması)
                 obs_tr.date = tr_start.strftime('%Y/%m/%d %H:%M:%S')
-                obs_tr.epoch = obs_tr.date 
                 b.compute(obs_tr)
-                ecl_start = ephem.Ecliptic(b)
-                d1 = math.degrees(ecl_start.lon)
+                d1 = math.degrees(ephem.Ecliptic(b).lon)
                 
                 obs_tr.date = tr_end.strftime('%Y/%m/%d %H:%M:%S')
-                obs_tr.epoch = obs_tr.date
                 b.compute(obs_tr)
-                ecl_end = ephem.Ecliptic(b)
-                d2 = math.degrees(ecl_end.lon)
+                d2 = math.degrees(ephem.Ecliptic(b).lon)
                 
                 s1 = ZODIAC[int(d1/30)%12]
                 s2 = ZODIAC[int(d2/30)%12]
                 tr_display.append(f"<b>{n}:</b> {s1} -> {s2}")
                 tr_report.append(f"Transit {n}: {s1} -> {s2}")
                 
-                for natal_n, _, natal_deg, _ in visual_data[2:]:
-                    if abs(d1 - natal_deg) < 4 or abs(d2 - natal_deg) < 4:
-                        tr_display.append(f"⚠️ {n} -> {natal_n}")
-                        tr_report.append(f"{n} transit, {natal_n} ile temas.")
+                # Natal Kontak (Unpack Hatası Önlemi: index 2'den başla)
+                if len(visual_data) > 2:
+                    for natal_n, _, natal_deg, _ in visual_data[2:]:
+                        if abs(d1 - natal_deg) < 4 or abs(d2 - natal_deg) < 4:
+                            tr_display.append(f"⚠️ {n} -> {natal_n}")
+                            tr_report.append(f"{n} transit, {natal_n} ile temas.")
             
             ai_data += f"\n\nTRANSIT ({start_date}-{end_date}):\n" + "\n".join(set(tr_report))
             transit_html = "<br><h4>⏳ Transitler</h4>" + "".join([f"<div class='transit-box'>{l}</div>" for l in tr_display])
@@ -281,7 +273,7 @@ with st.sidebar:
     name = st.text_input("İsim", "Ziyaretçi")
     d_date = st.date_input("Tarih", value=datetime(1980, 11, 26))
     
-    # --- DÜZELTME: STEP=60 EKLENDİ (DAKİKA SEÇİMİ) ---
+    # --- DAKİKA AYARI AKTİF ---
     d_time = st.time_input("Saat", value=datetime.strptime("16:00", "%H:%M"), step=60)
     
     st.caption("Saat Dilimi (GMT)")
@@ -307,8 +299,7 @@ if btn:
     info_html, ai_data, vis_data, cusps, aspects, transit_html, err = calculate_chart(name, d_date, d_time, lat, lon, utc_offset, transit_mode, start_date, end_date)
     
     if err: 
-        # Hata durumunda bile uygulamanın çökmemesi için mesaj göster
-        st.error(f"Hesaplama Hatası: {err}")
+        st.error(f"Bir hata oluştu: {err}")
     else:
         tab1, tab2, tab3 = st.tabs(["📝 Yorum", "🗺️ Harita", "📊 Veri"])
         with st.spinner("Yıldızlar inceleniyor..."):
