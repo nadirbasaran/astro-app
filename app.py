@@ -439,7 +439,7 @@ def create_pdf(name, info, ai_text, tech_block=""):
 # =========================================================
 # AI (Gemini)
 # =========================================================
-def get_ai_response(prompt, model="gemini-1.5-flash"):
+def get_ai_response(prompt, model="gemini-2.5-flash"):
     try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={API_KEY}"
         resp = requests.post(
@@ -698,3 +698,4 @@ KISA TEKNİK ÖZET:
     except Exception as e:
         st.error("Bir hata oluştu (detay aşağıda).")
         st.exception(e)
+
