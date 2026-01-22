@@ -1,7 +1,7 @@
 streamlit
-matplotlib
+requests
 ephem
 pytz
-requests
-numpy
+matplotlib
 fpdf
+numpy
