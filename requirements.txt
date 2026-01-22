@@ -1,5 +1,7 @@
 streamlit
 ephem
-requests
 matplotlib
-reportlab
+numpy
+requests
+pytz
+fpdf
