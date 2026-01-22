@@ -39,7 +39,7 @@ if "GOOGLE_API_KEY" not in st.secrets:
 API_KEY = st.secrets["GOOGLE_API_KEY"]
 
 # =========================================================
-# CONSTANTS (ÖNEMLİ: PLANETS burada TANIMLI)
+# CONSTANTS
 # =========================================================
 ZODIAC = ["Koç","Boğa","İkizler","Yengeç","Aslan","Başak","Terazi","Akrep","Yay","Oğlak","Kova","Balık"]
 ZODIAC_SYMBOLS = ["♈","♉","♊","♋","♌","♍","♎","♏","♐","♑","♒","♓"]
@@ -50,19 +50,14 @@ PLANET_SYMBOLS = {
     "ASC":"ASC","MC":"MC"
 }
 
-# ✅ HATA ÇÖZÜMÜ: PLANETS kesin burada tanımlı
-PLANETS = {
-    "Güneş": ephem.Sun(),
-    "Ay": ephem.Moon(),
-    "Merkür": ephem.Mercury(),
-    "Venüs": ephem.Venus(),
-    "Mars": ephem.Mars(),
-    "Jüpiter": ephem.Jupiter(),
-    "Satürn": ephem.Saturn(),
-    "Uranüs": ephem.Uranus(),
-    "Neptün": ephem.Neptune(),
-    "Plüton": ephem.Pluto()
-}
+# Gezegen Nesnelerini Fonksiyon İçinde Yaratmak Daha Güvenlidir (State kirliliğini önler)
+def get_planet_objects():
+    return {
+        "Güneş": ephem.Sun(), "Ay": ephem.Moon(), "Merkür": ephem.Mercury(),
+        "Venüs": ephem.Venus(), "Mars": ephem.Mars(), "Jüpiter": ephem.Jupiter(),
+        "Satürn": ephem.Saturn(), "Uranüs": ephem.Uranus(), "Neptün": ephem.Neptune(),
+        "Plüton": ephem.Pluto()
+    }
 
 ELEMENT = {
     "Koç":"Ateş","Aslan":"Ateş","Yay":"Ateş",
@@ -85,22 +80,8 @@ HOUSE_TOPICS = {
     11:"Sosyal çevre / Hedefler", 12:"Bilinçaltı / Geri planda olanlar"
 }
 
-PLANET_MEANING = {
-    "Güneş":"kimlik ve yön", "Ay":"duygusal ihtiyaçlar", "Merkür":"zihinsel süreçler ve iletişim",
-    "Venüs":"ilişkiler ve değerler", "Mars":"motivasyon ve mücadele", "Jüpiter":"büyüme, şans ve fırsatlar",
-    "Satürn":"sorumluluklar ve sınavlar", "Uranüs":"ani değişimler ve özgürleşme",
-    "Neptün":"idealler, sezgi ve belirsizlik", "Plüton":"dönüşüm, güç ve derinleşme"
-}
-
 ASPECT_ANGLES = {"Kavuşum":0,"Sekstil":60,"Kare":90,"Üçgen":120,"Karşıt":180}
 ASPECT_ORBS   = {"Kavuşum":8,"Sekstil":6,"Kare":8,"Üçgen":8,"Karşıt":8}
-ASPECT_MEANING = {
-    "Kavuşum":"bu konuyu güçlü biçimde büyütür ve görünür kılar.",
-    "Sekstil":"fırsat ve akış sağlar; doğru adımla destek verir.",
-    "Kare":"zorluk/gerilim üretir; doğru yönetilirse sıçrama getirir.",
-    "Üçgen":"doğal destek ve kolaylık verir; yetenekleri açar.",
-    "Karşıt":"denge ihtiyacını gösterir; ilişkiler/karşılık üzerinden çalışır."
-}
 
 # =========================================================
 # HELPERS
@@ -137,7 +118,6 @@ def clean_text_for_pdf(text):
     return text.encode('latin-1','ignore').decode('latin-1')
 
 def city_to_latlon(city):
-    # Streamlit Cloud uyumlu: Nominatim (OSM)
     try:
         r = requests.get(
             "https://nominatim.openstreetmap.org/search",
@@ -153,11 +133,14 @@ def city_to_latlon(city):
     return None, None
 
 # =========================================================
-# PLACIDUS
+# PLACIDUS (DÜZELTİLDİ: TARİH FORMATI)
 # =========================================================
 def calculate_placidus_cusps(utc_dt, lat, lon):
     obs = ephem.Observer()
-    obs.date = utc_dt
+    
+    # --- KRİTİK DÜZELTME: Datetime objesi yerine STRING veriyoruz ---
+    obs.date = utc_dt.strftime('%Y/%m/%d %H:%M:%S')
+    
     obs.lat, obs.lon = str(lat), str(lon)
 
     ramc = float(obs.sidereal_time())
@@ -197,27 +180,25 @@ def get_house_of_planet(deg, cusps):
         start = cusps[i]
         end = cusps[i+1] if i < 12 else cusps[1]
         if start < end:
-            if start <= deg < end:
-                return i
+            if start <= deg < end: return i
         else:
-            if start <= deg or deg < end:
-                return i
+            if start <= deg or deg < end: return i
     return 1
 
 # =========================================================
 # NATAL POSITIONS + ASPECTS
 # =========================================================
 def calculate_natal(utc_dt_str, lat, lon):
-    # Ephem date string: 'YYYY/MM/DD HH:MM:SS'
+    # utc_dt_str zaten string olarak geliyor, güvenli.
     obs = ephem.Observer()
     obs.date = utc_dt_str
     obs.lat, obs.lon = str(lat), str(lon)
+    # Güneş konumu (epoch) düzeltmesi için:
+    obs.epoch = utc_dt_str
 
-    # cusps needs same moment as datetime; parse to ephem.Date -> string OK for observer
-    # For cusps we will build using datetime via pytz conversion outside; we pass separately in calculate_all
-    # Here only planet longitudes.
     planets = []
-    for n, body in PLANETS.items():
+    planet_objs = get_planet_objects()
+    for n, body in planet_objs.items():
         body.compute(obs)
         deg = normalize(math.degrees(ephem.Ecliptic(body).lon))
         planets.append((n, deg))
@@ -242,7 +223,7 @@ def calculate_aspects(visual_data):
     return aspects_str, aspects_raw
 
 # =========================================================
-# TRANSITS (RANGE + NATAL CONTACTS + RANKING)
+# TRANSITS
 # =========================================================
 def calculate_transit_range(natal_visual, natal_cusps, start_dt_str, end_dt_str, lat, lon):
     obs = ephem.Observer()
@@ -268,16 +249,16 @@ def calculate_transit_range(natal_visual, natal_cusps, start_dt_str, end_dt_str,
 
     move_lines = []
     display_lines = []
-    hits_ranked = []  # (score, txt)
+    hits_ranked = [] 
 
     for pname, body in heavy_planets:
-        # Start pos
+        # Start
         obs.date = start_dt_str
         body.compute(obs)
         d_start = normalize(math.degrees(ephem.Ecliptic(body).lon))
         s_start = sign_name(d_start)
 
-        # End pos
+        # End
         obs.date = end_dt_str
         body.compute(obs)
         d_end = normalize(math.degrees(ephem.Ecliptic(body).lon))
@@ -286,20 +267,19 @@ def calculate_transit_range(natal_visual, natal_cusps, start_dt_str, end_dt_str,
         move_lines.append(f"Transit {pname}: {s_start} -> {s_end}")
         display_lines.append(f"<b>{pname}:</b> {s_start} {dec_to_dms(d_start%30)} ➔ {s_end} {dec_to_dms(d_end%30)}")
 
+        # Check midpoint/start/end
         checks = [d_start, normalize((d_start+d_end)/2), d_end]
 
         for natal_p, info in natal_map.items():
             nd = info["deg"]
             nh = info["house"]
-            topic = HOUSE_TOPICS.get(nh, "Genel Temalar")  # ✅ KeyError yok
+            topic = HOUSE_TOPICS.get(nh, "Genel Temalar")
 
             for dcheck in checks:
                 delta = angle_diff(dcheck, nd)
-
                 for asp, ang in ASPECT_ANGLES.items():
                     orb = 3 if asp in ("Kavuşum","Kare","Karşıt") else 2
                     if abs(delta - ang) <= orb:
-                        # güç puanı
                         score = 0
                         if pname in ("Satürn","Plüton"): score += 4
                         elif pname in ("Uranüs","Neptün"): score += 3
@@ -352,14 +332,20 @@ def element_quality_charts(elem, qual):
     with c1:
         fig = plt.figure()
         ax = fig.add_subplot(111)
-        ax.bar(list(elem.keys()), list(elem.values()))
-        ax.set_title("Element Dağılımı")
+        ax.bar(list(elem.keys()), list(elem.values()), color='#FFD700')
+        ax.set_title("Element Dağılımı", color='white')
+        ax.tick_params(axis='x', colors='white')
+        ax.tick_params(axis='y', colors='white')
+        fig.patch.set_alpha(0) 
         st.pyplot(fig)
     with c2:
         fig2 = plt.figure()
         ax2 = fig2.add_subplot(111)
-        ax2.bar(list(qual.keys()), list(qual.values()))
-        ax2.set_title("Nitelik Dağılımı")
+        ax2.bar(list(qual.keys()), list(qual.values()), color='#FF4B4B')
+        ax2.set_title("Nitelik Dağılımı", color='white')
+        ax2.tick_params(axis='x', colors='white')
+        ax2.tick_params(axis='y', colors='white')
+        fig2.patch.set_alpha(0)
         st.pyplot(fig2)
 
 # =========================================================
@@ -439,7 +425,7 @@ def create_pdf(name, info, ai_text, tech_block=""):
 # =========================================================
 # AI (Gemini)
 # =========================================================
-def get_ai_response(prompt, model="gemini-2.5-flash"):
+def get_ai_response(prompt, model="gemini-1.5-flash"):
     try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={API_KEY}"
         resp = requests.post(
@@ -461,7 +447,6 @@ def get_ai_response(prompt, model="gemini-2.5-flash"):
 # MAIN CALC
 # =========================================================
 def calculate_all(name, city, d_date, d_time, lat, lon, tz_mode, utc_offset, transit_enabled, start_date, end_date):
-    # tz_mode: "manual_gmt" or "istanbul_tz"
     local_dt = datetime.combine(d_date, d_time)
 
     if tz_mode == "manual_gmt":
@@ -472,6 +457,9 @@ def calculate_all(name, city, d_date, d_time, lat, lon, tz_mode, utc_offset, tra
         utc_dt = tz.localize(local_dt).astimezone(pytz.utc).replace(tzinfo=None)
         tz_label = "Europe/Istanbul"
 
+    # --- HATA ÖNLEME BURADA YAPILIYOR ---
+    # Placidus hesabı için de datetime objesini burada kullanıyoruz ancak 
+    # fonksiyon içinde string'e çeviriyoruz.
     cusps = calculate_placidus_cusps(utc_dt, lat, lon)
 
     asc_sign = sign_name(cusps[1])
@@ -514,7 +502,6 @@ def calculate_all(name, city, d_date, d_time, lat, lon, tz_mode, utc_offset, tra
 
     # Transit
     transit_html = ""
-    transit_ai_block = ""
     transit_hits_text = ""
 
     if transit_enabled:
@@ -698,4 +685,3 @@ KISA TEKNİK ÖZET:
     except Exception as e:
         st.error("Bir hata oluştu (detay aşağıda).")
         st.exception(e)
-
