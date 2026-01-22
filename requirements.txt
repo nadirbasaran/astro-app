@@ -1,6 +1,6 @@
-streamlit
-requests
-ephem
+streamlit>=1.30
+requests>=2.31
+ephem>=4.1
 pytz
-matplotlib
-fpdf
+matplotlib>=3.8
+fpdf>=1.7
