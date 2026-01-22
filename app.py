@@ -31,17 +31,15 @@ h1, h2, h3 { color: #FFD700 !important; font-family: 'Helvetica', sans-serif; te
 """, unsafe_allow_html=True)
 
 # =========================================================
-# API KEY
+# API (Gemini)
 # =========================================================
 if "GOOGLE_API_KEY" not in st.secrets:
     st.error("🚨 st.secrets['GOOGLE_API_KEY'] bulunamadı!")
     st.stop()
 API_KEY = st.secrets["GOOGLE_API_KEY"]
 
-GEN_API_BASE = "https://generativelanguage.googleapis.com/v1beta"
-
 # =========================================================
-# CONSTANTS (PLANETS dahil)
+# CONSTANTS
 # =========================================================
 ZODIAC = ["Koç","Boğa","İkizler","Yengeç","Aslan","Başak","Terazi","Akrep","Yay","Oğlak","Kova","Balık"]
 ZODIAC_SYMBOLS = ["♈","♉","♊","♋","♌","♍","♎","♏","♐","♑","♒","♓"]
@@ -52,18 +50,13 @@ PLANET_SYMBOLS = {
     "ASC":"ASC","MC":"MC"
 }
 
-PLANETS = {
-    "Güneş": ephem.Sun(),
-    "Ay": ephem.Moon(),
-    "Merkür": ephem.Mercury(),
-    "Venüs": ephem.Venus(),
-    "Mars": ephem.Mars(),
-    "Jüpiter": ephem.Jupiter(),
-    "Satürn": ephem.Saturn(),
-    "Uranüs": ephem.Uranus(),
-    "Neptün": ephem.Neptune(),
-    "Plüton": ephem.Pluto()
-}
+def get_planet_objects():
+    return {
+        "Güneş": ephem.Sun(), "Ay": ephem.Moon(), "Merkür": ephem.Mercury(),
+        "Venüs": ephem.Venus(), "Mars": ephem.Mars(), "Jüpiter": ephem.Jupiter(),
+        "Satürn": ephem.Saturn(), "Uranüs": ephem.Uranus(), "Neptün": ephem.Neptune(),
+        "Plüton": ephem.Pluto()
+    }
 
 ELEMENT = {
     "Koç":"Ateş","Aslan":"Ateş","Yay":"Ateş",
@@ -107,6 +100,7 @@ def dec_to_dms(deg):
     return f"{d:02d}° {m:02d}'"
 
 def sign_name(deg): return ZODIAC[int(deg/30) % 12]
+def sign_symbol(deg): return ZODIAC_SYMBOLS[int(deg/30) % 12]
 def get_element(sign): return ELEMENT.get(sign, "Bilinmiyor")
 def get_quality(sign): return QUALITY.get(sign, "Bilinmiyor")
 
@@ -138,76 +132,15 @@ def city_to_latlon(city):
     return None, None
 
 # =========================================================
-# GEMINI: MODEL LİSTESİ + OTOMATİK SEÇİM (404 ÇÖZÜMÜ)
-# =========================================================
-@st.cache_data(ttl=600)
-def list_gemini_models():
-    """
-    Erişilebilir modelleri API'den çeker.
-    Google bazen model adını 'models/gemini-...' formatında döndürür.
-    Biz de çağrıda TAM bu adı kullanacağız.
-    """
-    try:
-        url = f"{GEN_API_BASE}/models?key={API_KEY}"
-        r = requests.get(url, timeout=20)
-        if r.status_code != 200:
-            return [], f"Models list HTTP {r.status_code}"
-        data = r.json()
-        models = []
-        for m in data.get("models", []):
-            name = m.get("name", "")  # örn: "models/gemini-2.5-flash"
-            methods = m.get("supportedGenerationMethods", [])
-            if "generateContent" in methods and name:
-                models.append(name)
-        if not models:
-            return [], "generateContent destekleyen model bulunamadı."
-        return sorted(models), None
-    except Exception as e:
-        return [], str(e)
-
-def pick_default_model(models):
-    """
-    Önce 2.5 pro/flash arar, yoksa ilk modeli döner.
-    """
-    preferred = [
-        "models/gemini-2.5-pro",
-        "models/gemini-2.5-flash",
-        "models/gemini-2.5-flash-lite",
-        "models/gemini-2.0-pro",
-        "models/gemini-2.0-flash",
-    ]
-    for p in preferred:
-        if p in models:
-            return p
-    return models[0] if models else None
-
-def get_ai_response(prompt, model_fullname):
-    """
-    model_fullname: 'models/gemini-2.5-flash' gibi
-    """
-    try:
-        # ÖNEMLİ: model_fullname zaten "models/..." içeriyor => URL'de tekrar models/ eklemiyoruz.
-        url = f"{GEN_API_BASE}/{model_fullname}:generateContent?key={API_KEY}"
-        payload = {"contents": [{"parts": [{"text": prompt}]}]}
-        resp = requests.post(url, headers={"Content-Type":"application/json"}, data=json.dumps(payload), timeout=60)
-
-        if resp.status_code == 200:
-            js = resp.json()
-            if js.get("candidates"):
-                return js["candidates"][0]["content"]["parts"][0]["text"]
-            return "AI yanıtı boş döndü."
-        else:
-            # 404 ise: model adı erişilebilir değil veya retired
-            return f"AI Servis Hatası: HTTP {resp.status_code}"
-    except Exception as e:
-        return str(e)
-
-# =========================================================
-# PLACIDUS
+# PLACIDUS (DÜZELTİLDİ: TARİH FORMATI STRING)
 # =========================================================
 def calculate_placidus_cusps(utc_dt, lat, lon):
     obs = ephem.Observer()
-    obs.date = utc_dt
+    
+    # --- KRİTİK DÜZELTME: Datetime objesi yerine STRING veriyoruz ---
+    # Bu, "format string" hatasını çözer.
+    obs.date = utc_dt.strftime('%Y/%m/%d %H:%M:%S')
+    
     obs.lat, obs.lon = str(lat), str(lon)
 
     ramc = float(obs.sidereal_time())
@@ -247,23 +180,24 @@ def get_house_of_planet(deg, cusps):
         start = cusps[i]
         end = cusps[i+1] if i < 12 else cusps[1]
         if start < end:
-            if start <= deg < end:
-                return i
+            if start <= deg < end: return i
         else:
-            if start <= deg or deg < end:
-                return i
+            if start <= deg or deg < end: return i
     return 1
 
 # =========================================================
-# Natal + Aspects + Transit
+# NATAL POSITIONS
 # =========================================================
 def calculate_natal(utc_dt_str, lat, lon):
     obs = ephem.Observer()
-    obs.date = utc_dt_str
+    obs.date = utc_dt_str # Zaten string geliyor
     obs.lat, obs.lon = str(lat), str(lon)
+    # Güneş konumu (epoch) düzeltmesi:
+    obs.epoch = utc_dt_str
 
     planets = []
-    for n, body in PLANETS.items():
+    planet_objs = get_planet_objects()
+    for n, body in planet_objs.items():
         body.compute(obs)
         deg = normalize(math.degrees(ephem.Ecliptic(body).lon))
         planets.append((n, deg))
@@ -271,7 +205,9 @@ def calculate_natal(utc_dt_str, lat, lon):
 
 def calculate_aspects(visual_data):
     aspects_str = []
+    aspects_raw = []
     planet_list = [(n, d) for n, _, d, _ in visual_data if n not in ("ASC","MC")]
+
     for i in range(len(planet_list)):
         for j in range(i+1, len(planet_list)):
             p1, d1 = planet_list[i]
@@ -281,9 +217,13 @@ def calculate_aspects(visual_data):
                 orb = ASPECT_ORBS.get(asp, 8)
                 if abs(dd - ang) <= orb:
                     aspects_str.append(f"{p1} {asp} {p2} ({round(dd,1)}°)")
+                    aspects_raw.append((p1, asp, p2, dd))
                     break
-    return aspects_str
+    return aspects_str, aspects_raw
 
+# =========================================================
+# TRANSITS
+# =========================================================
 def calculate_transit_range(natal_visual, natal_cusps, start_dt_str, end_dt_str, lat, lon):
     obs = ephem.Observer()
     obs.lat, obs.lon = str(lat), str(lon)
@@ -300,18 +240,24 @@ def calculate_transit_range(natal_visual, natal_cusps, start_dt_str, end_dt_str,
     for n, sign, nd, sym in natal_visual:
         if n in ("ASC","MC"):
             continue
-        natal_map[n] = {"deg": nd, "house": get_house_of_planet(nd, natal_cusps)}
+        natal_map[n] = {
+            "deg": nd,
+            "house": get_house_of_planet(nd, natal_cusps),
+            "sign": sign_name(nd)
+        }
 
     move_lines = []
     display_lines = []
-    hits_ranked = []
+    hits_ranked = [] 
 
     for pname, body in heavy_planets:
+        # Start
         obs.date = start_dt_str
         body.compute(obs)
         d_start = normalize(math.degrees(ephem.Ecliptic(body).lon))
         s_start = sign_name(d_start)
 
+        # End
         obs.date = end_dt_str
         body.compute(obs)
         d_end = normalize(math.degrees(ephem.Ecliptic(body).lon))
@@ -320,6 +266,7 @@ def calculate_transit_range(natal_visual, natal_cusps, start_dt_str, end_dt_str,
         move_lines.append(f"Transit {pname}: {s_start} -> {s_end}")
         display_lines.append(f"<b>{pname}:</b> {s_start} {dec_to_dms(d_start%30)} ➔ {s_end} {dec_to_dms(d_end%30)}")
 
+        # Check midpoint/start/end
         checks = [d_start, normalize((d_start+d_end)/2), d_end]
 
         for natal_p, info in natal_map.items():
@@ -341,8 +288,10 @@ def calculate_transit_range(natal_visual, natal_cusps, start_dt_str, end_dt_str,
                         elif asp == "Kare": score += 2
                         else: score += 1
 
-                        hits_ranked.append((score, f"⚠️ Transit {pname} {asp} natal {natal_p} → {topic} (güç:{score})"))
+                        txt = f"⚠️ Transit {pname} {asp} natal {natal_p} → {topic} (güç:{score})"
+                        hits_ranked.append((score, txt))
 
+    # uniq + sort
     uniq = {}
     for s,t in hits_ranked:
         if t not in uniq or s > uniq[t]:
@@ -362,6 +311,9 @@ def calculate_transit_range(natal_visual, natal_cusps, start_dt_str, end_dt_str,
 
     return "\n".join(move_lines), hits_text, html
 
+# =========================================================
+# ELEMENT / QUALITY
+# =========================================================
 def element_quality_summary(visual_data):
     elem = {"Ateş":0,"Toprak":0,"Hava":0,"Su":0}
     qual = {"Öncü":0,"Sabit":0,"Değişken":0}
@@ -374,6 +326,30 @@ def element_quality_summary(visual_data):
         if q in qual: qual[q] += 1
     return elem, qual
 
+def element_quality_charts(elem, qual):
+    c1, c2 = st.columns(2)
+    with c1:
+        fig = plt.figure()
+        ax = fig.add_subplot(111)
+        ax.bar(list(elem.keys()), list(elem.values()), color='#FFD700')
+        ax.set_title("Element Dağılımı", color='white')
+        ax.tick_params(axis='x', colors='white')
+        ax.tick_params(axis='y', colors='white')
+        fig.patch.set_alpha(0) 
+        st.pyplot(fig)
+    with c2:
+        fig2 = plt.figure()
+        ax2 = fig2.add_subplot(111)
+        ax2.bar(list(qual.keys()), list(qual.values()), color='#FF4B4B')
+        ax2.set_title("Nitelik Dağılımı", color='white')
+        ax2.tick_params(axis='x', colors='white')
+        ax2.tick_params(axis='y', colors='white')
+        fig2.patch.set_alpha(0)
+        st.pyplot(fig2)
+
+# =========================================================
+# CHART VISUAL
+# =========================================================
 def draw_chart_visual(bodies_data, cusps):
     fig = plt.figure(figsize=(10, 10), facecolor='#0e1117')
     ax = fig.add_subplot(111, projection='polar')
@@ -412,6 +388,9 @@ def draw_chart_visual(bodies_data, cusps):
 
     return fig
 
+# =========================================================
+# PDF
+# =========================================================
 def create_pdf(name, info, ai_text, tech_block=""):
     try:
         pdf = FPDF()
@@ -442,6 +421,31 @@ def create_pdf(name, info, ai_text, tech_block=""):
     except Exception:
         return None
 
+# =========================================================
+# AI (Gemini) - DÜZELTİLDİ (404 HATASI İÇİN MODEL GÜNCELLENDİ)
+# =========================================================
+def get_ai_response(prompt, model="gemini-pro"):
+    try:
+        # gemini-1.5-flash yerine gemini-pro kullanıyoruz, daha stabildir.
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={API_KEY}"
+        resp = requests.post(
+            url,
+            headers={'Content-Type': 'application/json'},
+            data=json.dumps({"contents": [{"parts": [{"text": prompt}]}]}),
+            timeout=60
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("candidates"):
+                return data["candidates"][0]["content"]["parts"][0]["text"]
+            return "AI yanıtı boş döndü."
+        return f"AI Servis Hatası: HTTP {resp.status_code} ({resp.text})"
+    except Exception as e:
+        return str(e)
+
+# =========================================================
+# MAIN CALC
+# =========================================================
 def calculate_all(name, city, d_date, d_time, lat, lon, tz_mode, utc_offset, transit_enabled, start_date, end_date):
     local_dt = datetime.combine(d_date, d_time)
 
@@ -453,14 +457,20 @@ def calculate_all(name, city, d_date, d_time, lat, lon, tz_mode, utc_offset, tra
         utc_dt = tz.localize(local_dt).astimezone(pytz.utc).replace(tzinfo=None)
         tz_label = "Europe/Istanbul"
 
+    # --- HATA ÖNLEME: UTC datetime'ı string'e çeviriyoruz ---
+    # Bu, "not enough arguments for format string" hatasını engeller.
     cusps = calculate_placidus_cusps(utc_dt, lat, lon)
+
     asc_sign = sign_name(cusps[1])
     mc_sign = sign_name(cusps[10])
 
     info_html = f"<div class='metric-box'>🌍 <b>Doğum (UTC):</b> {utc_dt.strftime('%Y-%m-%d %H:%M')} <span class='small-note'>({tz_label})</span></div>"
     info_html += f"<div class='metric-box'>🚀 <b>Yükselen:</b> {asc_sign} {dec_to_dms(cusps[1]%30)} | <b>MC:</b> {mc_sign} {dec_to_dms(cusps[10]%30)}</div>"
 
+    # Observer date string
     utc_dt_str = utc_dt.strftime("%Y/%m/%d %H:%M:%S")
+
+    # Natal planet longitudes
     planet_lons = calculate_natal(utc_dt_str, lat, lon)
 
     visual_data = [("ASC", asc_sign, cusps[1], "ASC"), ("MC", mc_sign, cusps[10], "MC")]
@@ -471,6 +481,7 @@ def calculate_all(name, city, d_date, d_time, lat, lon, tz_mode, utc_offset, tra
     ai_data += f"ASC: {asc_sign} {dec_to_dms(cusps[1]%30)}\n"
     ai_data += f"MC: {mc_sign} {dec_to_dms(cusps[10]%30)}\n\n"
 
+    # Build natal details
     for (pname, deg) in planet_lons:
         sign = sign_name(deg)
         idx = int(deg/30) % 12
@@ -479,15 +490,19 @@ def calculate_all(name, city, d_date, d_time, lat, lon, tz_mode, utc_offset, tra
         ai_data += f"{pname}: {sign} {dec_to_dms(deg%30)} ({house}. Ev) | Tema: {HOUSE_TOPICS.get(house,'Genel')}\n"
         visual_data.append((pname, sign, deg, PLANET_SYMBOLS.get(pname,"")))
 
-    aspect_strings = calculate_aspects(visual_data)
+    # Aspects
+    aspect_strings, aspect_raw = calculate_aspects(visual_data)
     ai_data += "\nNATAL AÇILAR:\n" + (", ".join(aspect_strings) if aspect_strings else "Yok / Zayıf") + "\n"
 
+    # Element & Quality
     elem_counts, qual_counts = element_quality_summary(visual_data)
     ai_data += "\nELEMENT DAĞILIMI:\n" + "\n".join([f"{k}: {v}" for k,v in elem_counts.items()]) + "\n"
     ai_data += "\nNİTELİK DAĞILIMI:\n" + "\n".join([f"{k}: {v}" for k,v in qual_counts.items()]) + "\n"
 
+    # Transit
     transit_html = ""
     transit_hits_text = ""
+
     if transit_enabled:
         if tz_mode == "manual_gmt":
             tr_start_utc = datetime.combine(start_date, d_time) - timedelta(hours=int(utc_offset))
@@ -506,7 +521,16 @@ def calculate_all(name, city, d_date, d_time, lat, lon, tz_mode, utc_offset, tra
         )
         transit_html = tr_html
         transit_hits_text = tr_hits_text
-        ai_data += f"\n\nTRANSIT DÖNEMİ: {start_date} - {end_date}\nGEZEGEN HAREKETLERİ:\n{tr_report}\n\nÖNCELİKLİ TEMASLAR:\n{tr_hits_text}\n"
+
+        transit_ai_block = f"""
+TRANSIT DÖNEMİ: {start_date} - {end_date}
+GEZEGEN HAREKETLERİ:
+{tr_report}
+
+ÖNCELİKLİ TEMASLAR:
+{tr_hits_text}
+"""
+        ai_data += "\n\n" + transit_ai_block
 
     rule_summary = "KISA TEKNİK ÖZET:\n"
     rule_summary += f"- ASC {asc_sign}, MC {mc_sign} ekseni temel yaşam yönünü verir.\n"
@@ -515,6 +539,7 @@ def calculate_all(name, city, d_date, d_time, lat, lon, tz_mode, utc_offset, tra
         rule_summary += "- Transitlerde 'güç' puanı yüksek olan temasları önce yorumla.\n"
 
     return {
+        "utc_dt": utc_dt,
         "cusps": cusps,
         "info_html": info_html,
         "ai_data": ai_data,
@@ -531,8 +556,6 @@ def calculate_all(name, city, d_date, d_time, lat, lon, tz_mode, utc_offset, tra
 # UI
 # =========================================================
 st.title("🌌 Astro-Analiz Pro (Full – Hibrit)")
-
-models, models_err = list_gemini_models()
 
 with st.sidebar:
     st.header("Giriş Paneli")
@@ -551,31 +574,17 @@ with st.sidebar:
         index=0
     )
     utc_offset = st.number_input("GMT Farkı (Manuel)", value=3, min_value=-12, max_value=12, step=1)
+    st.caption("Not: 2016 ve benzeri yıllarda DST/offset değişimleri için 'Manuel GMT' daha tutarlı sonuç verir.")
 
     st.write("---")
     st.subheader("Koordinat")
     use_city = st.checkbox("Şehirden otomatik koordinat al", value=False)
+    if use_city:
+        st.caption("Şehirden alınan koordinat internet gerektirir (OSM Nominatim).")
 
     c1, c2 = st.columns(2)
     lat = c1.number_input("Enlem", 41.00)
     lon = c2.number_input("Boylam", 29.00)
-
-    st.write("---")
-    st.subheader("Gemini Model")
-    if models_err:
-        st.warning(f"Model listesi alınamadı: {models_err}")
-        model_fullname = "models/gemini-2.5-flash"  # deneme fallback
-        st.caption("Fallback model denenecek: models/gemini-2.5-flash")
-    else:
-        default_model = pick_default_model(models)
-        model_fullname = st.selectbox(
-            "Erişilebilir modeller",
-            options=models,
-            index=models.index(default_model) if default_model in models else 0
-        )
-        st.caption(f"Seçili model: {model_fullname}")
-
-    test_ai = st.button("AI Test (OK yazdır)")
 
     st.write("---")
     transit_mode = st.checkbox("Transit (Öngörü) Modu Aç ⏳", value=False)
@@ -589,10 +598,6 @@ with st.sidebar:
     st.write("---")
     q = st.text_area("Sorunuz", "Genel yorum")
     btn = st.button("Analiz Et ✨")
-
-if test_ai:
-    out = get_ai_response("Sadece OK yaz.", model_fullname=model_fullname)
-    st.info(out)
 
 if btn:
     try:
@@ -634,7 +639,8 @@ KISA TEKNİK ÖZET:
 """
 
         with st.spinner("Yıldızlar yorumlanıyor..."):
-            ai_reply = get_ai_response(prompt_text, model_fullname=model_fullname)
+            # gemini-1.5-flash yerine gemini-pro kullanıyoruz (404 hatasını önlemek için)
+            ai_reply = get_ai_response(prompt_text, model="gemini-pro")
 
         with tab1:
             st.markdown(ai_reply)
@@ -674,19 +680,7 @@ KISA TEKNİK ÖZET:
 
         with tab4:
             st.markdown("### 📈 Dağılımlar")
-            c1, c2 = st.columns(2)
-            with c1:
-                fig = plt.figure()
-                ax = fig.add_subplot(111)
-                ax.bar(list(data["elem_counts"].keys()), list(data["elem_counts"].values()))
-                ax.set_title("Element Dağılımı")
-                st.pyplot(fig)
-            with c2:
-                fig2 = plt.figure()
-                ax2 = fig2.add_subplot(111)
-                ax2.bar(list(data["qual_counts"].keys()), list(data["qual_counts"].values()))
-                ax2.set_title("Nitelik Dağılımı")
-                st.pyplot(fig2)
+            element_quality_charts(data["elem_counts"], data["qual_counts"])
 
     except Exception as e:
         st.error("Bir hata oluştu (detay aşağıda).")
