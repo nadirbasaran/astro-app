@@ -7,299 +7,324 @@ import math
 from datetime import datetime, timedelta
 import requests
 import json
+import pytz
 import numpy as np
 from fpdf import FPDF
 
 # =========================================================
-# AYARLAR
+# AYARLAR & CSS
 # =========================================================
 st.set_page_config(page_title="Astro-Analiz Pro", layout="wide", page_icon="🔮")
 
 st.markdown("""
 <style>
-.stApp { background: linear-gradient(to bottom, #0e1117, #1a1c24); color: #e0e0e0; }
-h1, h2 { color: #FFD700 !important; font-family: sans-serif; }
-.metric-box { background-color: #262730; padding: 10px; border-radius: 5px; border-left: 3px solid #FFD700; margin-bottom: 5px; }
-.aspect-box { background-color: #2d2f3d; padding: 5px; margin: 2px; border-radius: 3px; font-size: 13px; border: 1px solid #444; }
+.stApp { background: linear-gradient(to bottom, #0e1117, #24283b); color: #e0e0e0; }
+h1, h2, h3 { color: #FFD700 !important; font-family: 'Helvetica', sans-serif; }
 /* Form Butonu */
-[data-testid="stFormSubmitButton"] > button {
-    background-color: #FFD700 !important; color: black !important; border: none; font-weight: bold; width: 100%; padding: 10px;
+[data-testid="stFormSubmitButton"] > button { 
+    background-color: #FFD700 !important; color: #000 !important; border-radius: 20px; border: none; font-weight: bold; width: 100%; height: 50px; font-size: 18px; margin-top: 10px;
 }
+[data-testid="stSidebar"] { background-color: #161a25; border-right: 1px solid #FFD700; }
+.metric-box { background-color: #1e2130; padding: 10px; border-radius: 8px; border-left: 4px solid #FFD700; margin-bottom: 8px; font-size: 14px; color: white; }
+.aspect-box { background-color: #25293c; padding: 5px 10px; margin: 2px; border-radius: 4px; font-size: 13px; border: 1px solid #444; }
+.transit-box { background-color: #2d1b2e; border-left: 4px solid #ff4b4b; padding: 8px; margin-bottom: 6px; font-size: 13px; }
+.error-box { background-color: #ff4b4b30; border-left: 4px solid #ff4b4b; padding: 10px; border-radius: 5px; color: white; }
 </style>
 """, unsafe_allow_html=True)
 
 # API KONTROL
 if "GOOGLE_API_KEY" not in st.secrets:
-    st.error("Lütfen Secrets ayarlarından GOOGLE_API_KEY ekleyin.")
+    st.error("🚨 Lütfen 'secrets' ayarlarından GOOGLE_API_KEY ekleyin.")
     st.stop()
 API_KEY = st.secrets["GOOGLE_API_KEY"]
 
 # =========================================================
-# SABİTLER & VERİ YAPILARI
+# SABİTLER
 # =========================================================
-ZODIAC = ["Koç", "Boğa", "İkizler", "Yengeç", "Aslan", "Başak", "Terazi", "Akrep", "Yay", "Oğlak", "Kova", "Balık"]
-ZODIAC_SYMBOLS = ["♈", "♉", "♊", "♋", "♌", "♍", "♎", "♏", "♐", "♑", "♒", "♓"]
-PLANET_SYMBOLS = {
-    "Güneş": "☉", "Ay": "☽", "Merkür": "☿", "Venüs": "♀", "Mars": "♂",
-    "Jüpiter": "♃", "Satürn": "♄", "Uranüs": "♅", "Neptün": "♆", "Plüton": "♇",
-    "ASC": "ASC", "MC": "MC"
-}
+ZODIAC = ["Koç","Boğa","İkizler","Yengeç","Aslan","Başak","Terazi","Akrep","Yay","Oğlak","Kova","Balık"]
+ZODIAC_SYMBOLS = ["♈","♉","♊","♋","♌","♍","♎","♏","♐","♑","♒","♓"]
+PLANET_SYMBOLS = {"Güneş":"☉","Ay":"☽","Merkür":"☿","Venüs":"♀","Mars":"♂","Jüpiter":"♃","Satürn":"♄","Uranüs":"♅","Neptün":"♆","Plüton":"♇","ASC":"ASC","MC":"MC"}
+ASPECT_ANGLES = {"Kavuşum":0,"Sekstil":60,"Kare":90,"Üçgen":120,"Karşıt":180}
+ASPECT_ORBS = {"Kavuşum":8,"Sekstil":6,"Kare":8,"Üçgen":8,"Karşıt":8}
 
 # =========================================================
-# MATEMATİK MOTORU (Astro-Seek Hassasiyeti)
+# YARDIMCI FONKSİYONLAR
 # =========================================================
-def normalize(deg):
-    """Açıyı 0-360 derece arasına sabitler"""
-    return deg % 360
+def normalize(deg): return deg % 360
+def angle_diff(a,b): d = abs(a-b); return min(d, 360-d)
+def dec_to_dms(deg): d = int(deg); m = int(round((deg - d) * 60)); return f"{d:02d}° {m:02d}'" if m!=60 else f"{d+1:02d}° 00'"
+def sign_name(deg): return ZODIAC[int(deg/30) % 12]
+def clean_text_for_pdf(text):
+    replacements = {'ğ':'g','Ğ':'G','ş':'s','Ş':'S','ı':'i','İ':'I','ü':'u','Ü':'U','ö':'o','Ö':'O','ç':'c','Ç':'C'}
+    for k,v in replacements.items(): text = text.replace(k,v)
+    return text.encode('latin-1','ignore').decode('latin-1')
 
-def dec_to_dms(deg):
-    """Dereceyi Derece dk' formata çevirir"""
-    d = int(deg)
-    m = int(round((deg - d) * 60))
-    if m == 60:
-        d += 1
-        m = 0
-    return f"{d:02d}° {m:02d}'"
+def get_ephem_body(name):
+    bodies = {"Güneş": ephem.Sun(), "Ay": ephem.Moon(), "Merkür": ephem.Mercury(), "Venüs": ephem.Venus(), "Mars": ephem.Mars(), "Jüpiter": ephem.Jupiter(), "Satürn": ephem.Saturn(), "Uranüs": ephem.Uranus(), "Neptün": ephem.Neptune(), "Plüton": ephem.Pluto()}
+    return bodies.get(name)
 
-def get_zodiac_sign(deg):
-    """Derecenin hangi burca düştüğünü bulur"""
-    return ZODIAC[int(deg / 30) % 12]
-
-def get_house_placidus(deg, cusps):
-    """Gezegenin hangi evde olduğunu bulur"""
-    deg = normalize(deg)
-    for i in range(1, 13):
-        start = cusps[i]
-        end = cusps[i+1] if i < 12 else cusps[1]
-        if start < end:
-            if start <= deg < end: return i
-        else: # Balık-Koç geçişi (359->0)
-            if start <= deg or deg < end: return i
-    return 1
-
-def calculate_chart_data(name, d_date, d_time, lat, lon, utc_offset):
-    # 1. UTC Zamanı Hesapla
+# =========================================================
+# TEMEL HESAPLAMA (GARANTİLİ YÖNTEM)
+# =========================================================
+def calculate_chart_data(name, city, d_date, d_time, lat, lon, utc_offset, transit_enabled, s_date, e_date):
+    # 1. Tarih Hazırlığı (Hata vermeyen yöntem)
     local_dt = datetime.combine(d_date, d_time)
-    utc_dt = local_dt - timedelta(hours=utc_offset)
-    
-    # 2. PyEphem Gözlemci (Epoch AYARLAMAYIN - J2000 Standart Kalsın)
+    utc_dt = local_dt - timedelta(hours=int(utc_offset))
+    date_str = utc_dt.strftime('%Y/%m/%d %H:%M:%S') # KESİN ÇÖZÜM: String Format
+
+    # 2. Gözlemci
     obs = ephem.Observer()
-    obs.date = utc_dt.strftime('%Y/%m/%d %H:%M:%S') # String format şart
-    obs.lat = str(lat)
-    obs.lon = str(lon)
-    # obs.epoch satırı SİLİNDİ (Hatanın kaynağı buydu)
+    obs.date = date_str
+    obs.lat, obs.lon = str(lat), str(lon)
+    # obs.epoch = date_str # Astro-Seek uyumu için bunu pasif yapıyoruz veya J2000 kullanıyoruz.
 
-    # 3. ASC ve MC Hesaplama (Trigonometrik)
-    # Astro-Seek ile eşleşmesi için hassas sidereal time kullanımı
-    st_rad = float(obs.sidereal_time())
+    # 3. ASC & MC (Trigonometrik)
+    ra_mc = float(obs.sidereal_time())
+    obl = math.radians(23.44)
     lat_rad = math.radians(lat)
-    obl_rad = math.radians(23.4456) # Ekliptik eğikliği (Epsilon)
 
-    # MC (Midheaven)
-    mc_rad = math.atan2(math.tan(st_rad), math.cos(obl_rad))
+    mc_rad = math.atan2(math.tan(ra_mc), math.cos(obl))
     mc_deg = normalize(math.degrees(mc_rad))
-    if not (0 <= abs(mc_deg - math.degrees(st_rad)) <= 90 or 0 <= abs(mc_deg - math.degrees(st_rad) - 360) <= 90):
+    if not (0 <= abs(mc_deg - math.degrees(ra_mc)) <= 90 or 0 <= abs(mc_deg - math.degrees(ra_mc) - 360) <= 90):
         mc_deg = normalize(mc_deg + 180)
 
-    # ASC (Ascendant)
-    asc_rad = math.atan2(math.cos(st_rad), -(math.sin(st_rad) * math.cos(obl_rad) + math.tan(lat_rad) * math.sin(obl_rad)))
+    asc_rad = math.atan2(math.cos(ra_mc), -(math.sin(ra_mc)*math.cos(obl) + math.tan(lat_rad)*math.sin(obl)))
     asc_deg = normalize(math.degrees(asc_rad))
 
-    # Ev Girişleri (Basitleştirilmiş Placidus Yaklaşımı - Hata vermez)
-    cusps = {1: asc_deg, 10: mc_deg}
-    # Ara evleri yaklaşık hesapla (Tam Placidus algoritması çok uzundur, bu app için yeterli yaklaşım)
-    ic_deg = normalize(mc_deg + 180)
-    dsc_deg = normalize(asc_deg + 180)
-    cusps[4] = ic_deg
-    cusps[7] = dsc_deg
+    # 4. EV SİSTEMİ (Equal House - Görsel Hata Vermez)
+    # Placidus matematiksel olarak karmaşıktır ve kodda hata yaptırır. 
+    # Equal sistemde 1. Ev ASC'dir, diğerleri +30 eklenerek gider. Görseli kusursuzdur.
+    cusps = {}
+    for i in range(1, 13):
+        cusps[i] = normalize(asc_deg + (i-1)*30)
     
-    # Diğer evler (Eşit aralıklı yaklaşım - Görsel için yeterli)
-    for i in [2,3,5,6,8,9,11,12]:
-        cusps[i] = normalize(asc_deg + (i-1)*30) # Basit yerleşim
+    # MC'yi 10. Ev girişi olarak kaydetmiyoruz (Equal sistemde MC haritada serbest dolaşır), 
+    # ama görselde MC noktasını ayrıca çizeceğiz.
 
-    # 4. Gezegen Konumları
-    # (İsim, Obje)
-    bodies_def = [
-        ("Güneş", ephem.Sun()), ("Ay", ephem.Moon()), 
-        ("Merkür", ephem.Mercury()), ("Venüs", ephem.Venus()), ("Mars", ephem.Mars()),
-        ("Jüpiter", ephem.Jupiter()), ("Satürn", ephem.Saturn()), 
-        ("Uranüs", ephem.Uranus()), ("Neptün", ephem.Neptune()), ("Plüton", ephem.Pluto())
+    asc_sign = sign_name(asc_deg)
+    mc_sign = sign_name(mc_deg)
+
+    info_html = f"<div class='metric-box'>🌍 <b>Doğum:</b> {local_dt.strftime('%d.%m.%Y %H:%M')}</div>"
+    info_html += f"<div class='metric-box'>🚀 <b>Yükselen:</b> {asc_sign} {dec_to_dms(asc_deg%30)}</div>"
+    info_html += f"<div class='metric-box'>👑 <b>MC:</b> {mc_sign} {dec_to_dms(mc_deg%30)}</div>"
+    
+    ai_data = f"İsim: {name}\nŞehir: {city}\nASC: {asc_sign} {dec_to_dms(asc_deg)}\nMC: {mc_sign}\n"
+
+    # 5. Gezegenler (Unpack Hatası Önlemi: 4'lü tuple)
+    visual_data = [
+        ("ASC", asc_sign, asc_deg, "ASC"),
+        ("MC", mc_sign, mc_deg, "MC")
     ]
 
-    # Veri Listesi: (İsim, Burç Adı, Derece, Sembol) -> HEPSİ 4 ELEMANLI OLACAK
-    visual_data = []
+    planet_list = ["Güneş", "Ay", "Merkür", "Venüs", "Mars", "Jüpiter", "Satürn", "Uranüs", "Neptün", "Plüton"]
     
-    # Önce ASC ve MC ekle
-    visual_data.append(("ASC", get_zodiac_sign(asc_deg), asc_deg, "ASC"))
-    visual_data.append(("MC", get_zodiac_sign(mc_deg), mc_deg, "MC"))
-
-    html_info = f"<div class='metric-box'>🌍 <b>UTC:</b> {utc_dt.strftime('%H:%M')}</div>"
-    html_info += f"<div class='metric-box'>🚀 <b>Yükselen:</b> {get_zodiac_sign(asc_deg)} {dec_to_dms(asc_deg % 30)}</div>"
-    html_info += f"<div class='metric-box'>👑 <b>MC:</b> {get_zodiac_sign(mc_deg)} {dec_to_dms(mc_deg % 30)}</div>"
-    
-    ai_text_data = f"Doğum: {local_dt}\nYükselen: {get_zodiac_sign(asc_deg)}\n"
-
-    for name, body in bodies_def:
+    for pname in planet_list:
+        body = get_ephem_body(pname)
         body.compute(obs)
-        # Ecliptic boylamı (Hatasız yöntem)
-        lon_deg = normalize(math.degrees(ephem.Ecliptic(body).lon))
+        deg = normalize(math.degrees(ephem.Ecliptic(body).lon))
+        sign = sign_name(deg)
         
-        sign = get_zodiac_sign(lon_deg)
-        dms = dec_to_dms(lon_deg % 30)
-        house = get_house_placidus(lon_deg, cusps)
+        # Ev Bulucu (Equal House)
+        # Gezegenin derecesi - ASC derecesi bize evini verir
+        diff = normalize(deg - asc_deg)
+        house_num = int(diff / 30) + 1
         
-        html_info += f"<div class='metric-box'><b>{name}:</b> {sign} {dms} ({house}. Ev)</div>"
-        ai_text_data += f"{name}: {sign} {dms} ({house}. Ev)\n"
+        info_html += f"<div class='metric-box'><b>{pname}</b>: {sign} {dec_to_dms(deg%30)} ({house_num}. Ev)</div>"
+        ai_data += f"{pname}: {sign} ({house_num}. Ev)\n"
         
-        # LİSTEYE EKLE (4 ELEMANLI - GARANTİ)
-        visual_data.append((name, sign, lon_deg, PLANET_SYMBOLS.get(name, "")))
+        visual_data.append((pname, sign, deg, PLANET_SYMBOLS.get(pname,"")))
 
-    # 5. Açılar
-    aspects = []
-    # Sadece gezegenleri al (index 2'den başla, ASC/MC hariç)
-    planets_only = visual_data[2:] 
+    # 6. Açılar
+    aspects_str = []
+    # Sadece gezegenleri al (ASC/MC visual_data'nın ilk 2 elemanı, onları atla)
+    p_objs = visual_data[2:] 
+    for i in range(len(p_objs)):
+        for j in range(i+1, len(p_objs)):
+            n1, _, d1, _ = p_objs[i]
+            n2, _, d2, _ = p_objs[j]
+            diff = angle_diff(d1, d2)
+            for asp, ang in ASPECT_ANGLES.items():
+                if abs(diff - ang) <= ASPECT_ORBS.get(asp, 8):
+                    aspects_str.append(f"{n1} {asp} {n2} ({int(diff)}°)")
+                    break
     
-    for i in range(len(planets_only)):
-        for j in range(i+1, len(planets_only)):
-            n1, s1, d1, sym1 = planets_only[i] # 4 eleman unpack edilir, hata vermez
-            n2, s2, d2, sym2 = planets_only[j]
-            
-            diff = abs(d1 - d2)
-            if diff > 180: diff = 360 - diff
-            
-            aspect_name = ""
-            if diff <= 8: aspect_name = "Kavuşum"
-            elif 112 <= diff <= 128: aspect_name = "Üçgen"
-            elif 82 <= diff <= 98: aspect_name = "Kare"
-            elif 172 <= diff <= 180: aspect_name = "Karşıt"
-            
-            if aspect_name:
-                aspects.append(f"{n1} {aspect_name} {n2} ({int(diff)}°)")
+    ai_data += "Açılar: " + ", ".join(aspects_str) + "\n"
 
-    ai_text_data += "\nAÇILAR:\n" + ", ".join(aspects)
-    
-    return html_info, ai_text_data, visual_data, cusps, aspects
+    # 7. Transitler
+    transit_html = ""
+    if transit_enabled:
+        t_start = datetime.combine(s_date, d_time) - timedelta(hours=int(utc_offset))
+        t_end = datetime.combine(e_date, d_time) - timedelta(hours=int(utc_offset))
+        
+        obs_tr = ephem.Observer()
+        obs_tr.lat, obs_tr.lon = str(lat), str(lon)
+        
+        tr_lines = []
+        for pname in ["Jüpiter", "Satürn", "Plüton"]:
+            body = get_ephem_body(pname)
+            
+            # Başlangıç
+            obs_tr.date = t_start.strftime('%Y/%m/%d %H:%M:%S')
+            body.compute(obs_tr)
+            s1 = sign_name(math.degrees(ephem.Ecliptic(body).lon))
+            
+            # Bitiş
+            obs_tr.date = t_end.strftime('%Y/%m/%d %H:%M:%S')
+            body.compute(obs_tr)
+            s2 = sign_name(math.degrees(ephem.Ecliptic(body).lon))
+            
+            tr_lines.append(f"<div class='transit-box'><b>{pname}:</b> {s1} ➔ {s2}</div>")
+            if s1 != s2: ai_data += f"TRANSIT: {pname} {s1} burcundan {s2} burcuna geçiyor.\n"
+        
+        transit_html = "".join(tr_lines)
+
+    return {
+        "info": info_html, "ai": ai_data, "vis": visual_data, "cusps": cusps,
+        "asps": aspects_str, "tr_html": transit_html
+    }
 
 # =========================================================
-# HARİTA ÇİZİMİ
+# ÇİZİM MOTORU (Düzeltildi)
 # =========================================================
 def draw_chart(visual_data, cusps):
-    fig = plt.figure(figsize=(8,8), facecolor='#0e1117')
+    fig = plt.figure(figsize=(10,10), facecolor='#0e1117')
     ax = fig.add_subplot(111, projection='polar')
     ax.set_facecolor('#1a1c24')
     ax.grid(False)
     ax.set_yticklabels([])
     
-    # ASC'yi Sola (180 dereceye) sabitle
-    asc_angle = math.radians(cusps[1])
-    ax.set_theta_offset(np.pi - asc_angle)
+    # Haritayı ASC'ye göre döndür (ASC solda = 180 derece)
+    asc_deg = cusps[1]
+    ax.set_theta_offset(np.pi - math.radians(asc_deg))
     ax.set_theta_direction(1) # Saat yönünün tersi
 
-    # Zodyak Çemberi
-    for i in range(12):
-        angle = math.radians(i * 30)
-        ax.plot([angle, angle], [1, 1.2], color='#FFD700', lw=1, alpha=0.5)
-        # Burç Sembolleri
-        mid_angle = math.radians(i * 30 + 15)
-        ax.text(mid_angle, 1.3, ZODIAC_SYMBOLS[i], color='white', fontsize=14, ha='center')
+    # 1. Ev Çizgileri (Kusursuz 12 Dilim)
+    for i in range(1, 13):
+        angle = math.radians(cusps[i])
+        ax.plot([angle, angle], [0, 1.2], color='#444', linewidth=1, linestyle='--')
+        # Ev Numarası
+        mid_angle = math.radians(cusps[i] + 15)
+        ax.text(mid_angle, 0.4, str(i), color='#555', ha='center', fontweight='bold')
 
-    # Gezegenler
+    # 2. Zodyak Çemberi
+    circles = np.linspace(0, 2*np.pi, 100)
+    ax.plot(circles, [1.2]*100, color='#FFD700', linewidth=2)
+    
+    for i in range(12):
+        deg = i * 30 + 15
+        rad = math.radians(deg)
+        # Burç Sembolleri (Dönme açısını düzelterek)
+        rot = deg - asc_deg - 90 # Metni merkeze hizala
+        ax.text(rad, 1.25, ZODIAC_SYMBOLS[i], color='#FFD700', fontsize=14, ha='center')
+        # Burç Ayrım Çizgileri
+        sep = math.radians(i*30)
+        ax.plot([sep, sep], [1.15, 1.25], color='#FFD700', linewidth=1)
+
+    # 3. Gezegenler
     for name, sign, deg, sym in visual_data:
-        angle = math.radians(deg)
+        rad = math.radians(deg)
         color = '#FF4B4B' if name in ["ASC", "MC"] else 'white'
-        # Marker
-        ax.plot(angle, 1.05, 'o', color=color, markersize=8)
-        # Sembol
-        ax.text(angle, 1.12, sym, color=color, fontsize=12, ha='center', fontweight='bold')
+        
+        # MC ve ASC'yi çizgi olarak uzat
+        if name in ["ASC", "MC"]:
+            ax.plot([rad, rad], [0, 1.2], color=color, linewidth=2)
+        
+        ax.plot(rad, 1.05, 'o', color=color, markersize=8)
+        ax.text(rad, 1.12, sym, color=color, fontsize=12, ha='center', fontweight='bold')
 
     return fig
 
 # =========================================================
-# YARDIMCI SERVİSLER (PDF & AI)
+# AI & PDF
 # =========================================================
+def get_ai_response(prompt):
+    try:
+        # Hata vermeyen, en güncel model
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={API_KEY}"
+        resp = requests.post(url, headers={'Content-Type':'application/json'}, data=json.dumps({"contents":[{"parts":[{"text":prompt}]}]}), timeout=8)
+        
+        if resp.status_code == 200:
+            return resp.json()['candidates'][0]['content']['parts'][0]['text']
+        else:
+            return f"⚠️ AI Servis Hatası: {resp.status_code}. (Kota dolmuş veya API Key hatalı olabilir). Analiz verileri aşağıdadır."
+    except Exception as e:
+        return f"⚠️ Bağlantı Hatası: {str(e)}"
+
 def create_pdf(name, text):
     try:
-        pdf = FPDF()
-        pdf.add_page()
-        # Türkçe karakterleri temizle (FPDF hatası almamak için)
-        tr_map = {'ğ':'g','Ğ':'G','ş':'s','Ş':'S','ı':'i','İ':'I','ü':'u','Ü':'U','ö':'o','Ö':'O','ç':'c','Ç':'C'}
-        clean_name = name
-        for k,v in tr_map.items(): clean_name = clean_name.replace(k,v)
-        
-        pdf.set_font("Arial", 'B', 16)
-        pdf.cell(0, 10, f"ANALIZ: {clean_name}", ln=True)
-        pdf.set_font("Arial", '', 12)
-        
-        clean_text = text
-        for k,v in tr_map.items(): clean_text = clean_text.replace(k,v)
-        
-        pdf.multi_cell(0, 8, clean_text)
+        pdf = FPDF(); pdf.add_page(); pdf.set_font("Arial", 'B', 16)
+        pdf.cell(0, 10, clean_text_for_pdf(f"ANALIZ: {name}"), ln=True)
+        pdf.set_font("Arial", '', 12); pdf.multi_cell(0, 8, clean_text_for_pdf(text))
         return pdf.output(dest='S').encode('latin-1', 'ignore')
     except: return None
 
-def get_ai_interpretation(prompt):
-    try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={API_KEY}"
-        headers = {'Content-Type': 'application/json'}
-        data = {"contents": [{"parts": [{"text": prompt}]}]}
-        response = requests.post(url, headers=headers, json=data)
-        
-        if response.status_code == 200:
-            return response.json()['candidates'][0]['content']['parts'][0]['text']
-        else:
-            return f"AI Servis Hatası: {response.status_code}. (API Kotası dolmuş olabilir)"
-    except Exception as e:
-        return f"Bağlantı Hatası: {str(e)}"
-
 # =========================================================
-# ARAYÜZ (FORM İLE)
+# ARAYÜZ
 # =========================================================
-st.title("🌌 Astro-Analiz Pro (Final)")
+st.title("🌌 Astro-Analiz Pro (Final - Stabil)")
 
 with st.sidebar:
     st.header("Giriş")
     with st.form("astro_form"):
         name = st.text_input("İsim", "Ziyaretçi")
-        
-        # Tarih ve Saat
+        city = st.text_input("Şehir", "İstanbul")
         d_date = st.date_input("Doğum Tarihi", value=datetime(1980, 11, 26))
-        d_time = st.time_input("Doğum Saati", value=datetime.strptime("16:00", "%H:%M"))
+        d_time = st.time_input("Saat", value=datetime.strptime("16:00", "%H:%M"))
         
-        utc_offset = st.number_input("GMT Farkı (Örn: Türkiye için 3)", value=3)
-        
-        # Koordinat (Manuel Giriş Daha Güvenli)
+        st.write("---")
+        utc_offset = st.number_input("GMT Farkı (Türkiye: +3)", value=3)
         c1, c2 = st.columns(2)
         lat = c1.number_input("Enlem", 41.00)
         lon = c2.number_input("Boylam", 29.00)
         
-        q = st.text_area("Sorunuz", "Genel yorum?")
-        
-        # --- BUTON BURADA ---
-        submit = st.form_submit_button("ANALİZ ET ✨")
+        tr_mode = st.checkbox("Transit Modu")
+        # Varsayılan tarihler
+        s_val = datetime.now().date(); e_val = s_val + timedelta(days=180)
+        if tr_mode:
+            s_date = st.date_input("Başlangıç", value=s_val)
+            e_date = st.date_input("Bitiş", value=e_val)
+        else:
+            s_date = s_val; e_date = e_val
 
-if submit:
+        st.write("---")
+        q = st.text_area("Sorunuz", "Genel yorum")
+        
+        # BUTON
+        submitted = st.form_submit_button("ANALİZİ BAŞLAT ✨")
+
+if submitted:
     try:
-        html_info, ai_data, vis_data, cusps, asps = calculate_chart_data(name, d_date, d_time, lat, lon, utc_offset)
+        # Şehir koordinat (opsiyonel)
+        if city and lat==41.0 and lon==29.0:
+            lt, ln = city_to_latlon(city)
+            if lt: lat, lon = lt, ln
+
+        data = calculate_chart_data(name, city, d_date, d_time, lat, lon, utc_offset, tr_mode, s_date, e_date)
         
         t1, t2, t3 = st.tabs(["📝 Yorum", "🗺️ Harita", "📊 Veriler"])
         
         with t1:
-            with st.spinner("Yıldızlar yorumlanıyor..."):
-                ai_reply = get_ai_interpretation(f"Sen bir astrologsun. {name} için yorum yap. Soru: {q}. Veriler: {ai_data}")
-            st.markdown(ai_reply)
+            with st.spinner("Yıldızlar hesaplanıyor..."):
+                ai_reply = get_ai_response(f"Sen astrologsun. {name}, {city}. Soru: {q}.\nVeri: {data['ai']}")
             
-            pdf_bytes = create_pdf(name, ai_reply)
-            if pdf_bytes:
-                st.download_button("PDF Olarak İndir", pdf_bytes, "analiz.pdf", "application/pdf")
-        
+            if "⚠️" in ai_reply:
+                st.markdown(f"<div class='error-box'>{ai_reply}</div>", unsafe_allow_html=True)
+            else:
+                st.markdown(ai_reply)
+            
+            pdf = create_pdf(name, ai_reply)
+            if pdf: st.download_button("PDF İndir", pdf, "analiz.pdf")
+
         with t2:
-            st.pyplot(draw_chart(vis_data, cusps))
-            
+            st.pyplot(draw_chart(data['vis'], data['cusps']))
+
         with t3:
-            st.markdown(html_info, unsafe_allow_html=True)
+            st.markdown(data['info'], unsafe_allow_html=True)
             st.markdown("### Açılar")
-            for a in asps:
-                st.markdown(f"<div class='aspect-box'>{a}</div>", unsafe_allow_html=True)
+            for a in data['asps']: st.markdown(f"<div class='aspect-box'>{a}</div>", unsafe_allow_html=True)
+            if tr_mode: 
+                st.markdown("### Transitler")
+                st.markdown(data['tr_html'], unsafe_allow_html=True)
 
     except Exception as e:
-        st.error(f"Beklenmeyen bir hata oluştu: {str(e)}")
+        st.error(f"Kritik Hata: {str(e)}")
