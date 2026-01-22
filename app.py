@@ -120,6 +120,85 @@ HEAVY_TRANSITS = [
 ]
 
 # =========================
+# NEW: ELEMENT/QUALITY WEIGHTED (Senin puanlama görseline göre)
+# =========================
+BASE_WEIGHTS = {
+    "Güneş": 3,
+    "Ay": 3,
+    "ASC": 3,
+    "MC": 1,
+    "Merkür": 1,
+    "Venüs": 1,
+    "Mars": 1,
+    "Jüpiter": 1,
+    "Satürn": 1,
+    # Uranüs/Neptün/Plüton opsiyonel +1 (UI ile açılacak)
+    "Uranüs": 0,
+    "Neptün": 0,
+    "Plüton": 0,
+}
+
+def element_quality_weighted(placements, include_outer=False):
+    """
+    placements: list[dict] (planet, sign, deg, house)
+    include_outer: Uranüs/Neptün/Plüton'u +1 say
+    Döner:
+      grid[q][e], elem_totals, qual_totals, total_points
+    """
+    elements = ["Ateş","Hava","Toprak","Su"]
+    qualities = ["Öncü","Sabit","Değişken"]
+    grid = {q: {e: 0 for e in elements} for q in qualities}
+
+    weights = dict(BASE_WEIGHTS)
+    if include_outer:
+        weights["Uranüs"] = 1
+        weights["Neptün"] = 1
+        weights["Plüton"] = 1
+
+    def add(sign, w):
+        e = ELEMENT.get(sign)
+        q = QUALITY.get(sign)
+        if e in elements and q in qualities:
+            grid[q][e] += w
+
+    for p in placements:
+        planet = p["planet"]
+        w = weights.get(planet, 0)
+        if w <= 0:
+            continue
+        add(p["sign"], w)
+
+    elem_totals = {e: 0 for e in elements}
+    qual_totals = {q: 0 for q in qualities}
+    total = 0
+
+    for q in qualities:
+        row_sum = 0
+        for e in elements:
+            v = grid[q][e]
+            row_sum += v
+            elem_totals[e] += v
+            total += v
+        qual_totals[q] = row_sum
+
+    return grid, elem_totals, qual_totals, total
+
+def render_weight_table_md(grid, elem_totals, qual_totals, total):
+    elements = ["Ateş","Hava","Toprak","Su"]
+    qualities = ["Öncü","Sabit","Değişken"]
+
+    header = "| Nitelik \\ Element | " + " | ".join(elements) + " | Toplam |\n"
+    header += "|---" + "|---" * (len(elements)+1) + "|\n"
+
+    rows = ""
+    for q in qualities:
+        row_vals = [grid[q][e] for e in elements]
+        rows += f"| **{q}** | " + " | ".join(str(v) for v in row_vals) + f" | **{qual_totals[q]}** |\n"
+
+    footer = "| **Toplam** | " + " | ".join(f"**{elem_totals[e]}**" for e in elements) + f" | **{total}** |\n"
+    return header + rows + footer
+
+# =========================
 # HELPERS
 # =========================
 def normalize(deg): return deg % 360
@@ -216,8 +295,7 @@ def gemini_generate(prompt: str, model_fullname: str) -> str:
 # =========================
 def calculate_placidus_cusps(utc_dt, lat, lon):
     """
-    PyEphem ile pratik bir cusp hesabı.
-    Not: Swiss Ephemeris kadar hassas değil ama cusp’a göre ev yerleştirme doğru çalışır.
+    PyEphem ile pratik bir cusp hesabı (placidus-like).
     """
     obs = ephem.Observer()
     obs.lat, obs.lon = str(lat), str(lon)
@@ -244,10 +322,9 @@ def calculate_placidus_cusps(utc_dt, lat, lon):
     asc_deg = normalize(math.degrees(asc_rad))
     dsc_deg = normalize(asc_deg + 180)
 
-    # Quadrant interpolation (approx Placidus-like)
+    # Quadrant interpolation (approx)
     cusps = {1: asc_deg, 4: ic_deg, 7: dsc_deg, 10: mc_deg}
 
-    # approximate 11/12 and 2/3 via trisecting arcs (pragmatic)
     diff = (asc_deg - mc_deg) % 360
     cusps[11] = normalize(mc_deg + diff/3)
     cusps[12] = normalize(mc_deg + 2*diff/3)
@@ -323,7 +400,7 @@ def compute_natal(utc_dt, lat, lon):
                     aspects_raw.append((n1, asp, n2, dd))
                     break
 
-    # element/quality
+    # simple element/quality counts (count-based, legacy)
     elem = {"Ateş":0,"Toprak":0,"Hava":0,"Su":0}
     qual = {"Öncü":0,"Sabit":0,"Değişken":0}
     for p in placements:
@@ -350,7 +427,6 @@ def compute_transits(natal_placements, natal_cusps, lat, lon, tr_start_utc, tr_e
 
     tr_mid_utc = tr_start_utc + (tr_end_utc - tr_start_utc)/2
 
-    # map natal planet -> deg/house
     natal_map = {p["planet"]: p for p in natal_placements if p["planet"] not in ("ASC","MC")}
 
     movement = []
@@ -373,11 +449,10 @@ def compute_transits(natal_placements, natal_cusps, lat, lon, tr_start_utc, tr_e
         else:
             house_themes.append(f"{tname} {h1}. ev → {h3}. ev: {HOUSE_TOPICS.get(h1)} temaslarından {HOUSE_TOPICS.get(h3)} temalarına kayış.")
 
-        # natal aspects check at start/mid/end
         checks = [(d1,"başlangıç"),(d2,"orta"),(d3,"bitiş")]
-        for np_name, np in natal_map.items():
-            nd = np["deg"]
-            nh = np["house"]
+        for np_name, np_ in natal_map.items():
+            nd = np_["deg"]
+            nh = np_["house"]
             topic = HOUSE_TOPICS.get(nh,"Genel")
 
             for dcheck, when in checks:
@@ -395,7 +470,6 @@ def compute_transits(natal_placements, natal_cusps, lat, lon, tr_start_utc, tr_e
 
                         hits.append((score, f"⚠️ {when}: Transit {tname} {asp} natal {np_name} → {topic} (güç:{score})"))
 
-    # unique + sort
     uniq = {}
     for s,t in hits:
         if t not in uniq or s > uniq[t]:
@@ -405,10 +479,10 @@ def compute_transits(natal_placements, natal_cusps, lat, lon, tr_start_utc, tr_e
     return movement, house_themes, hits_sorted
 
 # =========================
-# CHART VISUAL (simple)
+# CHART VISUAL (smaller + container width)
 # =========================
 def draw_chart_visual(bodies_data, cusps):
-    fig = plt.figure(figsize=(9, 9), facecolor='#0e1117')
+    fig = plt.figure(figsize=(6.8, 6.8), facecolor='#0e1117')
     ax = fig.add_subplot(111, projection='polar')
     ax.set_facecolor('#1a1c24')
 
@@ -425,7 +499,7 @@ def draw_chart_visual(bodies_data, cusps):
         nxt = cusps[i+1] if i < 12 else cusps[1]
         d = (nxt - cusps[i]) % 360
         mid = math.radians(cusps[i] + d/2)
-        ax.text(mid, 0.42, str(i), color='#888', ha='center', fontsize=11, fontweight='bold')
+        ax.text(mid, 0.42, str(i), color='#888', ha='center', fontsize=10, fontweight='bold')
 
     # zodiac ring
     circles = np.linspace(0, 2*np.pi, 120)
@@ -433,7 +507,7 @@ def draw_chart_visual(bodies_data, cusps):
     for i in range(12):
         deg = i*30 + 15
         rad = math.radians(deg)
-        ax.text(rad, 1.32, ZODIAC_SYMBOLS[i], ha='center', color='#FFD700', fontsize=16, rotation=deg-180)
+        ax.text(rad, 1.30, ZODIAC_SYMBOLS[i], ha='center', color='#FFD700', fontsize=15, rotation=deg-180)
         sep = math.radians(i*30)
         ax.plot([sep, sep], [1.15, 1.25], color='#FFD700')
 
@@ -441,10 +515,11 @@ def draw_chart_visual(bodies_data, cusps):
     for name, sign, deg, sym in bodies_data:
         rad = math.radians(deg)
         c = '#FF4B4B' if name in ("ASC","MC") else 'white'
-        s = 14 if name in ("ASC","MC") else 11
+        s = 12 if name in ("ASC","MC") else 10
         ax.plot(rad, 1.05, 'o', color=c, markersize=s, markeredgecolor='#FFD700')
-        ax.text(rad, 1.17, sym, color=c, fontsize=12, ha='center')
+        ax.text(rad, 1.16, sym, color=c, fontsize=11, ha='center')
 
+    plt.tight_layout()
     return fig
 
 # =========================
@@ -469,7 +544,7 @@ def rule_based_summary(placements, aspects_raw, elem, qual, transit_hits_sorted=
     if sun: lines.append(f"- **Güneş {sun['sign']} ({sun['house']}. ev)**: {HOUSE_TOPICS.get(sun['house'])} alanında kimlik vurgusu.")
     if moon: lines.append(f"- **Ay {moon['sign']} ({moon['house']}. ev)**: {HOUSE_TOPICS.get(moon['house'])} alanında duygusal hassasiyet.")
     if mc:  lines.append(f"- **MC {mc['sign']}**: kariyer/itibar yönelimi.")
-    lines.append(f"- **Baskın element:** {dom_elem} | **Baskın nitelik:** {dom_qual}")
+    lines.append(f"- **Baskın element (sayım):** {dom_elem} | **Baskın nitelik (sayım):** {dom_qual}")
 
     lines.append("")
     lines.append("## Açılar (Öne çıkanlar)")
@@ -576,6 +651,11 @@ with st.sidebar:
         lon = c2.number_input("Boylam", value=29.000000, format="%.6f")
 
         st.write("---")
+        st.subheader("Element/Nitelik Ayarı")
+        include_outer = st.checkbox("Uranüs/Neptün/Plüton'u +1 dahil et", value=False)
+        st.caption("Puanlama: Güneş/Ay/ASC=3; MC/Merkür/Venüs/Mars/Jüpiter/Satürn=1 (senin görsele göre).")
+
+        st.write("---")
         st.subheader("Transit (Öngörü)")
         transit_mode = st.checkbox("Transit modu aç", value=False)
         start_date = date.today()
@@ -618,13 +698,15 @@ if submitted:
     # Natal
     cusps, visual_data, placements, aspects_str, aspects_raw, elem, qual = compute_natal(utc_dt, lat, lon)
 
+    # NEW: weighted element/quality
+    w_grid, w_elem_totals, w_qual_totals, w_total = element_quality_weighted(placements, include_outer=include_outer)
+
     # Transit
     transit_movement = []
     transit_house_themes = []
     transit_hits_sorted = []
     transit_html = ""
     if transit_mode:
-        # Convert transit dates to UTC consistent with chosen tz method
         tr_start_local = datetime.combine(start_date, d_time)
         tr_end_local   = datetime.combine(end_date, d_time)
 
@@ -669,8 +751,15 @@ if submitted:
         ai_data += f"{p['planet']}: {p['sign']} {dec_to_dms(p['deg']%30)} ({p['house']}. Ev) | Tema: {HOUSE_TOPICS.get(p['house'])} | Anlam: {PLANET_MEANING.get(p['planet'],'')}\n"
 
     ai_data += "\nAçılar:\n" + (", ".join(aspects_str) if aspects_str else "Zayıf/Yok") + "\n"
-    ai_data += "\nElement:\n" + ", ".join([f"{k}:{v}" for k,v in elem.items()]) + "\n"
-    ai_data += "\nNitelik:\n" + ", ".join([f"{k}:{v}" for k,v in qual.items()]) + "\n"
+
+    # Legacy counts
+    ai_data += "\nElement (sayım):\n" + ", ".join([f"{k}:{v}" for k,v in elem.items()]) + "\n"
+    ai_data += "Nitelik (sayım):\n" + ", ".join([f"{k}:{v}" for k,v in qual.items()]) + "\n"
+
+    # NEW weighted
+    ai_data += "\nElement (puanlı):\n" + ", ".join([f"{k}:{v}" for k,v in w_elem_totals.items()]) + "\n"
+    ai_data += "Nitelik (puanlı):\n" + ", ".join([f"{k}:{v}" for k,v in w_qual_totals.items()]) + "\n"
+    ai_data += f"Toplam Puan: {w_total}\n"
 
     if transit_mode:
         ai_data += f"\nTRANSIT DÖNEMİ: {start_date} - {end_date}\n"
@@ -695,7 +784,7 @@ Soru: {question}
 
 Kurallar:
 - Teknik veriye sadık kal; uydurma yapma.
-- 1) Genel özet: ASC/MC, Güneş, Ay, element/nitelik.
+- 1) Genel özet: ASC/MC, Güneş, Ay, element/nitelik (özellikle PUANLI).
 - 2) Natal yorum: evlere göre (özellikle 1/4/7/10 ve soru ile ilgili evler).
 - 3) Açılar: en etkili 5 açıyı yorumla (kare/karşıt/kavuşum öncelik).
 - 4) Transit modu açıksa: {start_date} - {end_date} dönemi için öngörü yap; ev bazlı temaları ve güçlü temasları önce anlat.
@@ -727,8 +816,10 @@ KURAL TABANLI EK (kontrol amaçlı):
     ]
     tech_lines = [
         f"ASC: {asc_sign} {dec_to_dms(cusps[1]%30)} | MC: {mc_sign} {dec_to_dms(cusps[10]%30)}",
-        "Element: " + ", ".join([f"{k}:{v}" for k,v in elem.items()]),
-        "Nitelik: " + ", ".join([f"{k}:{v}" for k,v in qual.items()]),
+        "Element (sayım): " + ", ".join([f"{k}:{v}" for k,v in elem.items()]),
+        "Nitelik (sayım): " + ", ".join([f"{k}:{v}" for k,v in qual.items()]),
+        "Element (puanlı): " + ", ".join([f"{k}:{v}" for k,v in w_elem_totals.items()]),
+        "Nitelik (puanlı): " + ", ".join([f"{k}:{v}" for k,v in w_qual_totals.items()]),
         "Açılar: " + (", ".join(aspects_str[:12]) if aspects_str else "Zayıf/Yok"),
     ]
     if transit_mode:
@@ -753,7 +844,7 @@ KURAL TABANLI EK (kontrol amaçlı):
             st.warning("PDF üretilemedi.")
 
     with tab2:
-        st.pyplot(draw_chart_visual(visual_data, cusps))
+        st.pyplot(draw_chart_visual(visual_data, cusps), use_container_width=True)
 
     with tab3:
         c1, c2 = st.columns(2)
@@ -761,7 +852,7 @@ KURAL TABANLI EK (kontrol amaçlı):
             st.markdown("### 🪐 Natal Konumlar")
             st.markdown(info_html, unsafe_allow_html=True)
             for p in placements:
-                if p["planet"] in ("ASC","MC"): 
+                if p["planet"] in ("ASC","MC"):
                     continue
                 idx = ZODIAC.index(p["sign"])
                 st.markdown(
@@ -781,17 +872,28 @@ KURAL TABANLI EK (kontrol amaçlı):
                 st.markdown(transit_html, unsafe_allow_html=True)
 
     with tab4:
-        st.markdown("### 📊 Element & Nitelik Dağılımı")
+        st.markdown("### 📊 Element & Nitelik (Puanlı)")
+        st.markdown(
+            f"<div class='metric-box'><b>Toplam Puan:</b> {w_total} "
+            f"<span class='small-note'>(Güneş/Ay/ASC=3, MC/Merkür/Venüs/Mars/Jüpiter/Satürn=1"
+            f"{', Uranüs/Neptün/Plüton=1' if include_outer else ''})</span></div>",
+            unsafe_allow_html=True
+        )
+
+        # Tablo
+        st.markdown(render_weight_table_md(w_grid, w_elem_totals, w_qual_totals, w_total))
+
+        # Grafikler (puanlı)
         cc1, cc2 = st.columns(2)
         with cc1:
             fig = plt.figure()
             ax = fig.add_subplot(111)
-            ax.bar(list(elem.keys()), list(elem.values()))
-            ax.set_title("Element Dağılımı")
-            st.pyplot(fig)
+            ax.bar(list(w_elem_totals.keys()), list(w_elem_totals.values()))
+            ax.set_title("Element Puanları")
+            st.pyplot(fig, use_container_width=True)
         with cc2:
             fig2 = plt.figure()
             ax2 = fig2.add_subplot(111)
-            ax2.bar(list(qual.keys()), list(qual.values()))
-            ax2.set_title("Nitelik Dağılımı")
-            st.pyplot(fig2)
+            ax2.bar(list(w_qual_totals.keys()), list(w_qual_totals.values()))
+            ax2.set_title("Nitelik Puanları")
+            st.pyplot(fig2, use_container_width=True)
