@@ -34,7 +34,7 @@ h1, h2, h3 { color: #FFD700 !important; font-family: 'Helvetica', sans-serif; te
 # API (Gemini)
 # =========================================================
 if "GOOGLE_API_KEY" not in st.secrets:
-    st.error("🚨 st.secrets['GOOGLE_API_KEY'] bulunamadı!")
+    st.error("🚨 st.secrets['GOOGLE_API_KEY'] bulunamadı! Lütfen API anahtarınızı Secrets ayarlarından ekleyin.")
     st.stop()
 API_KEY = st.secrets["GOOGLE_API_KEY"]
 
@@ -132,14 +132,13 @@ def city_to_latlon(city):
     return None, None
 
 # =========================================================
-# PLACIDUS (DÜZELTİLDİ: "Format String" Hatasının Kaynağı)
+# PLACIDUS (DÜZELTİLDİ: TARİH FORMATI STRING)
 # =========================================================
 def calculate_placidus_cusps(utc_dt, lat, lon):
     obs = ephem.Observer()
     
-    # --- İŞTE DÜZELTME BURADA ---
-    # Önceden buraya datetime objesi veriyorduk, hata veriyordu.
-    # Şimdi string'e çeviriyoruz.
+    # --- KRİTİK DÜZELTME: Datetime objesi yerine STRING veriyoruz ---
+    # Bu, "format string" hatasını çözer.
     obs.date = utc_dt.strftime('%Y/%m/%d %H:%M:%S')
     
     obs.lat, obs.lon = str(lat), str(lon)
@@ -191,7 +190,7 @@ def get_house_of_planet(deg, cusps):
 # =========================================================
 def calculate_natal(utc_dt_str, lat, lon):
     obs = ephem.Observer()
-    obs.date = utc_dt_str 
+    obs.date = utc_dt_str # Zaten string geliyor
     obs.lat, obs.lon = str(lat), str(lon)
     # Güneş konumu (epoch) düzeltmesi:
     obs.epoch = utc_dt_str
@@ -423,11 +422,10 @@ def create_pdf(name, info, ai_text, tech_block=""):
         return None
 
 # =========================================================
-# AI (Gemini) - DÜZELTİLDİ: gemini-1.5-flash (404 Çözümü)
+# AI (Gemini) - DÜZELTİLDİ: gemini-1.5-flash
 # =========================================================
 def get_ai_response(prompt, model="gemini-1.5-flash"):
     try:
-        # gemini-pro (v1beta) 404 hatası veriyor, bu yüzden 1.5-flash kullanıyoruz.
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={API_KEY}"
         resp = requests.post(
             url,
@@ -440,7 +438,17 @@ def get_ai_response(prompt, model="gemini-1.5-flash"):
             if data.get("candidates"):
                 return data["candidates"][0]["content"]["parts"][0]["text"]
             return "AI yanıtı boş döndü."
-        return f"AI Servis Hatası: HTTP {resp.status_code} ({resp.text})"
+        
+        # Hata durumunda detaylı bilgi verelim
+        error_msg = f"AI Servis Hatası: HTTP {resp.status_code}"
+        try:
+            error_details = resp.json()
+            if "error" in error_details:
+                error_msg += f" - {error_details['error'].get('message', '')}"
+        except:
+            pass
+        return error_msg
+
     except Exception as e:
         return str(e)
 
@@ -597,90 +605,4 @@ with st.sidebar:
 
     st.write("---")
     q = st.text_area("Sorunuz", "Genel yorum")
-    btn = st.button("Analiz Et ✨")
-
-if btn:
-    try:
-        if use_city:
-            lt, ln = city_to_latlon(city)
-            if lt is not None and ln is not None:
-                lat, lon = lt, ln
-            else:
-                st.warning("Şehirden koordinat bulunamadı, manuel değerler kullanılacak.")
-
-        data = calculate_all(
-            name=name, city=city, d_date=d_date, d_time=d_time,
-            lat=lat, lon=lon,
-            tz_mode=tz_mode, utc_offset=utc_offset,
-            transit_enabled=transit_mode,
-            start_date=start_date, end_date=end_date
-        )
-
-        tab1, tab2, tab3, tab4 = st.tabs(["📝 Yorum & Öngörü", "🗺️ Harita", "📊 Teknik Veriler", "📈 Element/Nitelik"])
-
-        prompt_text = f"""
-Sen uzman bir astrologsun ve profesyonel danışman diliyle yazıyorsun.
-Kişi: {name} | Şehir: {city}
-Soru: {q}
-
-Kurallar:
-- Teknik veriye sadık kal, uydurma.
-- Önce genel harita özeti (ASC/MC/ Güneş-Ay teması).
-- Sonra soru odaklı analiz: ilgili ev/gezegen/açı mantığıyla.
-- Transit modu açıksa: {start_date} - {end_date} için öngörü yap.
-  'güç' puanı yüksek temasları öne çıkar.
-- En sonda "Özet & Tavsiye" maddeleri ver.
-
-TEKNİK VERİ:
-{data["ai_data"]}
-
-KISA TEKNİK ÖZET:
-{data["rule_summary"]}
-"""
-
-        with st.spinner("Yıldızlar yorumlanıyor..."):
-            ai_reply = get_ai_response(prompt_text, model="gemini-1.5-flash")
-
-        with tab1:
-            st.markdown(ai_reply)
-
-            tech_block = ""
-            tech_block += f"Koordinat: {lat}, {lon}\n"
-            tech_block += "Element: " + ", ".join([f"{k}:{v}" for k,v in data["elem_counts"].items()]) + "\n"
-            tech_block += "Nitelik: " + ", ".join([f"{k}:{v}" for k,v in data["qual_counts"].items()]) + "\n"
-            if transit_mode and data["transit_hits_text"]:
-                tech_block += "\nÖncelikli Transit Temaslar:\n" + data["transit_hits_text"] + "\n"
-
-            pdf_bytes = create_pdf(
-                name=name,
-                info=f"{d_date} {d_time} - {city} | lat:{lat} lon:{lon}",
-                ai_text=ai_reply,
-                tech_block=tech_block
-            )
-            if pdf_bytes:
-                st.download_button("📄 PDF İndir", pdf_bytes, "analiz.pdf", "application/pdf")
-            else:
-                st.warning("PDF oluşturulamadı.")
-
-        with tab2:
-            st.pyplot(draw_chart_visual(data["visual_data"], data["cusps"]))
-
-        with tab3:
-            c_a, c_b = st.columns(2)
-            with c_a:
-                st.markdown("### 🪐 Doğum Haritası")
-                st.markdown(data["info_html"], unsafe_allow_html=True)
-            with c_b:
-                st.markdown("### 📐 Açılar")
-                for asp in data["aspects"]:
-                    st.markdown(f"<div class='aspect-box'>{asp}</div>", unsafe_allow_html=True)
-                if transit_mode:
-                    st.markdown(data["transit_html"], unsafe_allow_html=True)
-
-        with tab4:
-            st.markdown("### 📈 Dağılımlar")
-            element_quality_charts(data["elem_counts"], data["qual_counts"])
-
-    except Exception as e:
-        st.error("Bir hata oluştu (detay aşağıda).")
-        st.exception(e)
+    btn = st.button
