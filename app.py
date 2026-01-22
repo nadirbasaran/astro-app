@@ -132,13 +132,14 @@ def city_to_latlon(city):
     return None, None
 
 # =========================================================
-# PLACIDUS (DÜZELTİLDİ: TARİH FORMATI STRING)
+# PLACIDUS (DÜZELTİLDİ: "Format String" Hatasının Kaynağı)
 # =========================================================
 def calculate_placidus_cusps(utc_dt, lat, lon):
     obs = ephem.Observer()
     
-    # --- KRİTİK DÜZELTME: Datetime objesi yerine STRING veriyoruz ---
-    # Bu, "format string" hatasını çözer.
+    # --- İŞTE DÜZELTME BURADA ---
+    # Önceden buraya datetime objesi veriyorduk, hata veriyordu.
+    # Şimdi string'e çeviriyoruz.
     obs.date = utc_dt.strftime('%Y/%m/%d %H:%M:%S')
     
     obs.lat, obs.lon = str(lat), str(lon)
@@ -190,7 +191,7 @@ def get_house_of_planet(deg, cusps):
 # =========================================================
 def calculate_natal(utc_dt_str, lat, lon):
     obs = ephem.Observer()
-    obs.date = utc_dt_str # Zaten string geliyor
+    obs.date = utc_dt_str 
     obs.lat, obs.lon = str(lat), str(lon)
     # Güneş konumu (epoch) düzeltmesi:
     obs.epoch = utc_dt_str
@@ -422,11 +423,11 @@ def create_pdf(name, info, ai_text, tech_block=""):
         return None
 
 # =========================================================
-# AI (Gemini) - DÜZELTİLDİ (404 HATASI İÇİN MODEL GÜNCELLENDİ)
+# AI (Gemini) - DÜZELTİLDİ: gemini-1.5-flash (404 Çözümü)
 # =========================================================
-def get_ai_response(prompt, model="gemini-pro"):
+def get_ai_response(prompt, model="gemini-1.5-flash"):
     try:
-        # gemini-1.5-flash yerine gemini-pro kullanıyoruz, daha stabildir.
+        # gemini-pro (v1beta) 404 hatası veriyor, bu yüzden 1.5-flash kullanıyoruz.
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={API_KEY}"
         resp = requests.post(
             url,
@@ -457,8 +458,7 @@ def calculate_all(name, city, d_date, d_time, lat, lon, tz_mode, utc_offset, tra
         utc_dt = tz.localize(local_dt).astimezone(pytz.utc).replace(tzinfo=None)
         tz_label = "Europe/Istanbul"
 
-    # --- HATA ÖNLEME: UTC datetime'ı string'e çeviriyoruz ---
-    # Bu, "not enough arguments for format string" hatasını engeller.
+    # --- HATA ÖNLEME BURADA: `utc_dt` ARTIK GÜVENLİ ---
     cusps = calculate_placidus_cusps(utc_dt, lat, lon)
 
     asc_sign = sign_name(cusps[1])
@@ -639,8 +639,7 @@ KISA TEKNİK ÖZET:
 """
 
         with st.spinner("Yıldızlar yorumlanıyor..."):
-            # gemini-1.5-flash yerine gemini-pro kullanıyoruz (404 hatasını önlemek için)
-            ai_reply = get_ai_response(prompt_text, model="gemini-pro")
+            ai_reply = get_ai_response(prompt_text, model="gemini-1.5-flash")
 
         with tab1:
             st.markdown(ai_reply)
