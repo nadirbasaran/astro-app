@@ -105,7 +105,7 @@ def transit_hits(natal,transit):
             for a,ang in ASPECTS.items():
                 if abs(diff(td,nd)-ang)<=2:
                     hits.append(
-                        f"{tp} – {np} {a} | {HOUSE_TOPICS[h]}"
+                        f"{tp} – {np} {a} | {HOUSE_TOPICS.get(h, "Genel Etki")}"
                     )
     return hits
 
@@ -172,3 +172,4 @@ Danisman gibi detayli yorumla.
 
     pdf=make_pdf(name,result)
     st.download_button("PDF indir",pdf,"astro_rapor.pdf","application/pdf")
+
