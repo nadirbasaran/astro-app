@@ -1,6 +1,5 @@
-streamlit>=1.30
-requests>=2.31
-ephem>=4.1
-pytz
-matplotlib>=3.8
-fpdf>=1.7
+streamlit
+ephem
+requests
+matplotlib
+reportlab
