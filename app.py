@@ -1,172 +1,174 @@
-# ================== ASTRO ANALIZ PRO — FIXED FULL ==================
+# ==========================================================
+# ASTRO ANALIZ PRO — FINAL (PLACIDUS / TRANSIT / AI)
+# ==========================================================
 
 import streamlit as st
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import ephem, math, pytz, json, requests
-import numpy as np
+import ephem, math, pytz, json, requests, numpy as np
 from datetime import datetime, timedelta
 from fpdf import FPDF
 
 # ---------------- PAGE ----------------
 st.set_page_config("Astro-Analiz Pro", "🔮", layout="wide")
 
-# ---------------- ZODIAC ----------------
+# ---------------- API ----------------
+if "GOOGLE_API_KEY" not in st.secrets:
+    st.error("GOOGLE_API_KEY tanımlı değil")
+    st.stop()
+API_KEY = st.secrets["GOOGLE_API_KEY"]
+
+# ---------------- CONSTANTS ----------------
 ZODIAC = ["Koç","Boğa","İkizler","Yengeç","Aslan","Başak",
           "Terazi","Akrep","Yay","Oğlak","Kova","Balık"]
 
-ASPECT_MEANING = {
-    "Kavuşum": "hayatınızda güçlü ve kaçınılmaz bir etki yaratır.",
-    "Kare": "zorlayıcı ama büyüme sağlayan bir süreçtir.",
-    "Üçgen": "destekleyici ve akışkan bir enerji sunar.",
-    "Karşıt": "denge kurmanız gereken bir alanı vurgular.",
-    "Sekstil": "fırsatları değerlendirme şansı verir."
+ELEMENT = {
+    "Koç":"Ateş","Aslan":"Ateş","Yay":"Ateş",
+    "Boğa":"Toprak","Başak":"Toprak","Oğlak":"Toprak",
+    "İkizler":"Hava","Terazi":"Hava","Kova":"Hava",
+    "Yengeç":"Su","Akrep":"Su","Balık":"Su"
 }
 
-# ---------------- UTILS ----------------
-def normalize(d): return d % 360
-def diff(a,b): return min(abs(a-b), 360-abs(a-b))
+QUALITY = {
+    "Koç":"Öncü","Yengeç":"Öncü","Terazi":"Öncü","Oğlak":"Öncü",
+    "Boğa":"Sabit","Aslan":"Sabit","Akrep":"Sabit","Kova":"Sabit",
+    "İkizler":"Değişken","Başak":"Değişken","Yay":"Değişken","Balık":"Değişken"
+}
 
-def sign_of(d): return ZODIAC[int(d//30)%12]
+PLANETS = {
+    "Güneş":ephem.Sun(),"Ay":ephem.Moon(),"Merkür":ephem.Mercury(),
+    "Venüs":ephem.Venus(),"Mars":ephem.Mars(),"Jüpiter":ephem.Jupiter(),
+    "Satürn":ephem.Saturn(),"Uranüs":ephem.Uranus(),
+    "Neptün":ephem.Neptune(),"Plüton":ephem.Pluto()
+}
 
-# ---------------- PLACIDUS ----------------
-def calculate_placidus_cusps(utc_dt, lat, lon):
-    obs = ephem.Observer()
-    obs.date = utc_dt
-    obs.lat, obs.lon = str(lat), str(lon)
+ASPECTS = {
+    "Kavuşum":0,"Sekstil":60,"Kare":90,"Üçgen":120,"Karşıt":180
+}
 
-    ramc = float(obs.sidereal_time())
-    eps = math.radians(23.44)
-    lat_r = math.radians(lat)
+HOUSE_TOPICS = {
+    1:"Kimlik","2":"Gelir","3":"Yakın çevre","4":"Ev / Aile",
+    5:"Aşk / Çocuk","6":"İş / Sağlık","7":"Evlilik",
+    8:"Kriz / Dönüşüm","9":"Yurt dışı","10":"Kariyer",
+    11:"Sosyal çevre","12":"Bilinçaltı"
+}
 
-    mc = math.degrees(math.atan2(math.tan(ramc), math.cos(eps))) % 360
-    asc = math.degrees(
-        math.atan2(
-            math.cos(ramc),
-            -(math.sin(ramc)*math.cos(eps)+math.tan(lat_r)*math.sin(eps))
-        )
-    ) % 360
-
-    cusps = {1:asc, 10:mc, 4:(mc+180)%360, 7:(asc+180)%360}
-    cusps[11]=(mc+(asc-mc)/3)%360
-    cusps[12]=(mc+2*(asc-mc)/3)%360
-    cusps[2]=(asc+(cusps[4]-asc)/3)%360
-    cusps[3]=(asc+2*(cusps[4]-asc)/3)%360
-    cusps[5]=(cusps[11]+180)%360
-    cusps[6]=(cusps[12]+180)%360
-    cusps[8]=(cusps[2]+180)%360
-    cusps[9]=(cusps[3]+180)%360
-    return cusps
-
-def house_of(deg, cusps):
+# ---------------- HELPERS ----------------
+def normalize(x): return x % 360
+def diff(a,b): return min(abs(a-b),360-abs(a-b))
+def sign_of(d): return ZODIAC[int(d//30)]
+def house_of(d,c):
     for i in range(1,13):
-        a = cusps[i]
-        b = cusps[i+1] if i<12 else cusps[1]
-        if a<b and a<=deg<b: return i
-        if a>b and (deg>=a or deg<b): return i
+        s=c[i]; e=c[i+1] if i<12 else c[1]
+        if s<e and s<=d<e: return i
+        if s>e and (d>=s or d<e): return i
     return 1
 
-# ---------------- PLANETS ----------------
-PLANETS = {
-    "Güneş":ephem.Sun(), "Ay":ephem.Moon(),
-    "Merkür":ephem.Mercury(), "Venüs":ephem.Venus(),
-    "Mars":ephem.Mars(), "Jüpiter":ephem.Jupiter(),
-    "Satürn":ephem.Saturn(), "Uranüs":ephem.Uranus(),
-    "Neptün":ephem.Neptune(), "Plüton":ephem.Pluto()
-}
+# ---------------- PLACIDUS ----------------
+def placidus_cusps(dt,lat,lon):
+    obs=ephem.Observer()
+    obs.date=dt; obs.lat=str(lat); obs.lon=str(lon)
+    ramc=float(obs.sidereal_time())
+    eps=math.radians(23.44)
+    latr=math.radians(lat)
 
-# ---------------- CORE ----------------
-def calculate_natal(dt_utc, lat, lon):
-    obs = ephem.Observer()
-    obs.date = dt_utc
-    obs.lat, obs.lon = str(lat), str(lon)
-    cusps = calculate_placidus_cusps(dt_utc, lat, lon)
+    mc=math.degrees(math.atan2(math.tan(ramc),math.cos(eps)))%360
+    asc=math.degrees(math.atan2(math.cos(ramc),
+        -(math.sin(ramc)*math.cos(eps)+math.tan(latr)*math.sin(eps))))%360
 
-    data=[]
+    cusps={1:asc,10:mc,4:(mc+180)%360,7:(asc+180)%360}
+    d=(asc-mc)%360
+    cusps[11]=(mc+d/3)%360; cusps[12]=(mc+2*d/3)%360
+    d=(cusps[4]-asc)%360
+    cusps[2]=(asc+d/3)%360; cusps[3]=(asc+2*d/3)%360
+    cusps[5]=(cusps[11]+180)%360; cusps[6]=(cusps[12]+180)%360
+    cusps[8]=(cusps[2]+180)%360; cusps[9]=(cusps[3]+180)%360
+    return cusps
+
+# ---------------- POSITIONS ----------------
+def positions(dt,lat,lon,cusps):
+    obs=ephem.Observer()
+    obs.date=dt; obs.lat=str(lat); obs.lon=str(lon)
+    out={}
     for n,b in PLANETS.items():
         b.compute(obs)
-        deg = normalize(math.degrees(ephem.Ecliptic(b).lon))
-        data.append({
-            "name":n,
-            "deg":deg,
-            "sign":sign_of(deg),
-            "house":house_of(deg,cusps)
-        })
-    return data, cusps
+        d=normalize(math.degrees(ephem.Ecliptic(b).lon))
+        out[n]=(d,sign_of(d),house_of(d,cusps))
+    return out
 
-# ---------------- ASPECTS ----------------
-def aspects(natal):
-    res=[]
-    for i in range(len(natal)):
-        for j in range(i+1,len(natal)):
-            d = diff(natal[i]["deg"], natal[j]["deg"])
-            for a,ang in {"Kavuşum":0,"Sekstil":60,"Kare":90,"Üçgen":120,"Karşıt":180}.items():
-                if abs(d-ang)<=6:
-                    res.append(f'{natal[i]["name"]} {a} {natal[j]["name"]}')
-    return res
+# ---------------- TRANSITS ----------------
+def transit_hits(natal,transit):
+    hits=[]
+    for tp,(td,_,_) in transit.items():
+        for np,(nd,_,h) in natal.items():
+            for a,ang in ASPECTS.items():
+                if abs(diff(td,nd)-ang)<=2:
+                    hits.append(
+                        f"{tp} – {np} {a} | {HOUSE_TOPICS[h]}"
+                    )
+    return hits
 
-# ---------------- TRANSIT ----------------
-def transit_analysis(natal, cusps, start, end, lat, lon):
-    obs = ephem.Observer()
-    obs.lat, obs.lon = str(lat), str(lon)
-    heavy = ["Jüpiter","Satürn","Uranüs","Neptün","Plüton"]
-
-    result=[]
-    for p in heavy:
-        b = PLANETS[p]
-        obs.date = end
-        b.compute(obs)
-        tdeg = normalize(math.degrees(ephem.Ecliptic(b).lon))
-        tsign = sign_of(tdeg)
-        thouse = house_of(tdeg,cusps)
-
-        for n in natal:
-            d = diff(tdeg,n["deg"])
-            if d<=4:
-                meaning = f"Transit {p}, natal {n['name']} ile kavuşumda. {thouse}. ev konuları aktif."
-                result.append(meaning)
-    return result
+# ---------------- AI ----------------
+def ai_text(prompt):
+    url=f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={API_KEY}"
+    data={"contents":[{"parts":[{"text":prompt}]}]}
+    r=requests.post(url,json=data)
+    return r.json()["candidates"][0]["content"]["parts"][0]["text"]
 
 # ---------------- PDF ----------------
-def clean_pdf(t):
-    for a,b in {"ğ":"g","ş":"s","ı":"i","İ":"I","ç":"c","ö":"o","ü":"u"}.items():
-        t=t.replace(a,b)
+class PDF(FPDF):
+    def header(self):
+        self.set_font("Arial","B",16)
+        self.cell(0,10,"ASTROLOJIK ANALIZ RAPORU",ln=1,align="C")
+
+def clean(t):
+    repl={"ğ":"g","Ğ":"G","ş":"s","Ş":"S","ı":"i","İ":"I",
+          "ü":"u","Ü":"U","ö":"o","Ö":"O","ç":"c","Ç":"C"}
+    for k,v in repl.items(): t=t.replace(k,v)
     return t.encode("latin-1","ignore").decode("latin-1")
 
-def make_pdf(name, text):
-    pdf=FPDF()
-    pdf.add_page()
-    pdf.set_font("Arial","B",14)
-    pdf.cell(0,10,clean_pdf(f"ASTRO ANALIZ – {name}"),ln=1)
-    pdf.set_font("Arial","",11)
-    pdf.multi_cell(0,8,clean_pdf(text))
-    return pdf.output(dest="S").encode("latin-1","ignore")
+def make_pdf(name,text):
+    p=PDF(); p.add_page()
+    p.set_font("Arial","",11)
+    p.multi_cell(0,8,clean(text))
+    return p.output(dest="S").encode("latin-1","ignore")
 
 # ---------------- UI ----------------
-st.title("🌌 Astro-Analiz Pro (Gerçek Final)")
+st.title("🌌 Astro-Analiz Pro — FINAL")
 
-name = st.text_input("İsim","Ziyaretçi")
-date = st.date_input("Doğum Tarihi")
-time = st.time_input("Saat", step=60)
-lat = st.number_input("Enlem",41.0)
-lon = st.number_input("Boylam",29.0)
-gmt = st.number_input("GMT",3)
+name=st.text_input("İsim","Ziyaretçi")
+city=st.text_input("Şehir","İstanbul")
+date=st.date_input("Doğum Tarihi")
+time=st.time_input("Saat",step=60)
+lat=st.number_input("Enlem",41.0)
+lon=st.number_input("Boylam",29.0)
+question=st.text_area("Sorunuz")
 
 if st.button("Analiz Et"):
-    local = datetime.combine(date,time)
-    utc = local - timedelta(hours=gmt)
+    tz=pytz.timezone("Europe/Istanbul")
+    birth=tz.localize(datetime.combine(date,time)).astimezone(pytz.utc)
+    cusps=placidus_cusps(birth,lat,lon)
+    natal=positions(birth,lat,lon,cusps)
 
-    natal,cusps = calculate_natal(utc,lat,lon)
-    asp = aspects(natal)
-    trans = transit_analysis(natal,cusps,utc,datetime.utcnow(),lat,lon)
+    now=datetime.utcnow()
+    transit=positions(now,lat,lon,cusps)
+    hits=transit_hits(natal,transit)
 
-    text="DOĞUM HARITASI:\n"
-    for n in natal:
-        text+=f"{n['name']} {n['sign']} {n['house']}. ev\n"
+    ai_prompt=f"""
+Sen profesyonel astrologsun.
+SORU: {question}
 
-    text+="\nAÇILAR:\n"+"\n".join(asp)
-    text+="\n\nTRANSITLER:\n"+"\n".join(trans)
+NATAL:
+{natal}
 
-    st.text(text)
-    st.download_button("PDF", make_pdf(name,text),"astro.pdf")
+TRANSIT:
+{hits}
+
+Danisman gibi detayli yorumla.
+"""
+    result=ai_text(ai_prompt)
+    st.markdown(result)
+
+    pdf=make_pdf(name,result)
+    st.download_button("PDF indir",pdf,"astro_rapor.pdf","application/pdf")
