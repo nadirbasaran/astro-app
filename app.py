@@ -20,7 +20,24 @@ st.markdown("""
 <style>
 .stApp { background: linear-gradient(to bottom, #0e1117, #24283b); color: #e0e0e0; }
 h1, h2, h3 { color: #FFD700 !important; font-family: 'Helvetica', sans-serif; text-shadow: 2px 2px 4px #000000; }
-.stButton>button { background-color: #FFD700; color: #000; border-radius: 20px; border: none; font-weight: bold; width: 100%; }
+
+/* BUTON STİLİ - FORM BUTONU İÇİN ÖZEL AYAR */
+[data-testid="stFormSubmitButton"] > button { 
+    background-color: #FFD700 !important; 
+    color: #000 !important; 
+    border-radius: 20px; 
+    border: none; 
+    font-weight: bold; 
+    width: 100%; 
+    height: 50px;
+    font-size: 18px;
+    margin-top: 10px;
+}
+[data-testid="stFormSubmitButton"] > button:hover {
+    background-color: #FFC107 !important;
+    color: #000 !important;
+}
+
 [data-testid="stSidebar"] { background-color: #161a25; border-right: 1px solid #FFD700; }
 .metric-box { background-color: #1e2130; padding: 10px; border-radius: 8px; border-left: 4px solid #FFD700; margin-bottom: 8px; font-size: 14px; color: white; }
 .metric-box b { color: #FFD700; }
@@ -34,7 +51,7 @@ h1, h2, h3 { color: #FFD700 !important; font-family: 'Helvetica', sans-serif; te
 # API (Gemini)
 # =========================================================
 if "GOOGLE_API_KEY" not in st.secrets:
-    st.error("🚨 st.secrets['GOOGLE_API_KEY'] bulunamadı! Lütfen API anahtarınızı Secrets ayarlarından ekleyin.")
+    st.error("🚨 st.secrets['GOOGLE_API_KEY'] bulunamadı!")
     st.stop()
 API_KEY = st.secrets["GOOGLE_API_KEY"]
 
@@ -138,7 +155,7 @@ def calculate_placidus_cusps(utc_dt, lat, lon):
     obs = ephem.Observer()
     
     # --- KRİTİK DÜZELTME: Datetime objesi yerine STRING veriyoruz ---
-    # Bu, "format string" hatasını çözer.
+    # Bu, "format string" hatasını KESİN olarak çözer.
     obs.date = utc_dt.strftime('%Y/%m/%d %H:%M:%S')
     
     obs.lat, obs.lon = str(lat), str(lon)
@@ -438,17 +455,7 @@ def get_ai_response(prompt, model="gemini-1.5-flash"):
             if data.get("candidates"):
                 return data["candidates"][0]["content"]["parts"][0]["text"]
             return "AI yanıtı boş döndü."
-        
-        # Hata durumunda detaylı bilgi verelim
-        error_msg = f"AI Servis Hatası: HTTP {resp.status_code}"
-        try:
-            error_details = resp.json()
-            if "error" in error_details:
-                error_msg += f" - {error_details['error'].get('message', '')}"
-        except:
-            pass
-        return error_msg
-
+        return f"AI Servis Hatası: HTTP {resp.status_code} ({resp.text})"
     except Exception as e:
         return str(e)
 
@@ -567,42 +574,138 @@ st.title("🌌 Astro-Analiz Pro (Full – Hibrit)")
 
 with st.sidebar:
     st.header("Giriş Paneli")
-    name = st.text_input("İsim", "Ziyaretçi")
-    city = st.text_input("Şehir", "İstanbul")
+    # --- FORM BAŞLANGICI ---
+    # Bu form sayesinde hem "Enter" tuşu çalışır hem de buton sabit görünür.
+    with st.form("entry_form"):
+        name = st.text_input("İsim", "Ziyaretçi")
+        city = st.text_input("Şehir", "İstanbul")
 
-    d_date = st.date_input("Doğum Tarihi", value=datetime(1980, 11, 26))
-    d_time = st.time_input("Doğum Saati", value=datetime.strptime("16:00", "%H:%M"), step=60)
+        d_date = st.date_input("Doğum Tarihi", value=datetime(1980, 11, 26))
+        d_time = st.time_input("Doğum Saati", value=datetime.strptime("16:00", "%H:%M"), step=60)
 
-    st.write("---")
-    st.subheader("Saat Dilimi")
-    tz_mode = st.radio(
-        "Hesap yöntemi",
-        options=["manual_gmt", "istanbul_tz"],
-        format_func=lambda x: "Manuel GMT (önerilir)" if x=="manual_gmt" else "Europe/Istanbul (pytz)",
-        index=0
-    )
-    utc_offset = st.number_input("GMT Farkı (Manuel)", value=3, min_value=-12, max_value=12, step=1)
-    st.caption("Not: 2016 ve benzeri yıllarda DST/offset değişimleri için 'Manuel GMT' daha tutarlı sonuç verir.")
+        st.write("---")
+        st.subheader("Saat Dilimi")
+        tz_mode = st.radio(
+            "Hesap yöntemi",
+            options=["manual_gmt", "istanbul_tz"],
+            format_func=lambda x: "Manuel GMT (önerilir)" if x=="manual_gmt" else "Europe/Istanbul (pytz)",
+            index=0
+        )
+        utc_offset = st.number_input("GMT Farkı (Manuel)", value=3, min_value=-12, max_value=12, step=1)
+        
+        st.write("---")
+        st.subheader("Koordinat")
+        use_city = st.checkbox("Şehirden otomatik koordinat al", value=False)
+        
+        c1, c2 = st.columns(2)
+        lat = c1.number_input("Enlem", 41.00)
+        lon = c2.number_input("Boylam", 29.00)
 
-    st.write("---")
-    st.subheader("Koordinat")
-    use_city = st.checkbox("Şehirden otomatik koordinat al", value=False)
-    if use_city:
-        st.caption("Şehirden alınan koordinat internet gerektirir (OSM Nominatim).")
+        st.write("---")
+        transit_mode = st.checkbox("Transit (Öngörü) Modu Aç ⏳", value=False)
+        
+        # Form içinde tarihleri ayarlamak için session state veya varsayılan değerleri kullanıyoruz
+        s_date_val = datetime.now().date()
+        e_date_val = (datetime.now() + timedelta(days=180)).date()
+        
+        # Transit modu seçiliyse tarihleri göster
+        if transit_mode:
+            c_t1, c_t2 = st.columns(2)
+            start_date = c_t1.date_input("Başlangıç", value=s_date_val)
+            end_date = c_t2.date_input("Bitiş", value=e_date_val)
+        else:
+            # Mod kapalıysa arka planda varsayılan tarihleri tut
+            start_date = s_date_val
+            end_date = e_date_val
 
-    c1, c2 = st.columns(2)
-    lat = c1.number_input("Enlem", 41.00)
-    lon = c2.number_input("Boylam", 29.00)
+        st.write("---")
+        q = st.text_area("Sorunuz (Ctrl+Enter ile gönder)", "Genel yorum")
+        
+        # --- BUTON BURADA ---
+        submitted = st.form_submit_button("Analiz Başlat ✨")
 
-    st.write("---")
-    transit_mode = st.checkbox("Transit (Öngörü) Modu Aç ⏳", value=False)
-    start_date = datetime.now().date()
-    end_date = (datetime.now() + timedelta(days=180)).date()
-    if transit_mode:
-        t1, t2 = st.columns(2)
-        start_date = t1.date_input("Başlangıç", value=start_date)
-        end_date = t2.date_input("Bitiş", value=end_date)
+if submitted:
+    try:
+        if use_city:
+            lt, ln = city_to_latlon(city)
+            if lt is not None and ln is not None:
+                lat, lon = lt, ln
+            else:
+                st.warning("Şehirden koordinat bulunamadı, manuel değerler kullanılacak.")
 
-    st.write("---")
-    q = st.text_area("Sorunuz", "Genel yorum")
-    btn = st.button
+        data = calculate_all(
+            name=name, city=city, d_date=d_date, d_time=d_time,
+            lat=lat, lon=lon,
+            tz_mode=tz_mode, utc_offset=utc_offset,
+            transit_enabled=transit_mode,
+            start_date=start_date, end_date=end_date
+        )
+
+        tab1, tab2, tab3, tab4 = st.tabs(["📝 Yorum & Öngörü", "🗺️ Harita", "📊 Teknik Veriler", "📈 Element/Nitelik"])
+
+        prompt_text = f"""
+Sen uzman bir astrologsun ve profesyonel danışman diliyle yazıyorsun.
+Kişi: {name} | Şehir: {city}
+Soru: {q}
+
+Kurallar:
+- Teknik veriye sadık kal, uydurma.
+- Önce genel harita özeti (ASC/MC/ Güneş-Ay teması).
+- Sonra soru odaklı analiz: ilgili ev/gezegen/açı mantığıyla.
+- Transit modu açıksa: {start_date} - {end_date} için öngörü yap.
+  'güç' puanı yüksek temasları öne çıkar.
+- En sonda "Özet & Tavsiye" maddeleri ver.
+
+TEKNİK VERİ:
+{data["ai_data"]}
+
+KISA TEKNİK ÖZET:
+{data["rule_summary"]}
+"""
+
+        with st.spinner("Yıldızlar yorumlanıyor..."):
+            ai_reply = get_ai_response(prompt_text, model="gemini-1.5-flash")
+
+        with tab1:
+            st.markdown(ai_reply)
+
+            tech_block = ""
+            tech_block += f"Koordinat: {lat}, {lon}\n"
+            tech_block += "Element: " + ", ".join([f"{k}:{v}" for k,v in data["elem_counts"].items()]) + "\n"
+            tech_block += "Nitelik: " + ", ".join([f"{k}:{v}" for k,v in data["qual_counts"].items()]) + "\n"
+            if transit_mode and data["transit_hits_text"]:
+                tech_block += "\nÖncelikli Transit Temaslar:\n" + data["transit_hits_text"] + "\n"
+
+            pdf_bytes = create_pdf(
+                name=name,
+                info=f"{d_date} {d_time} - {city} | lat:{lat} lon:{lon}",
+                ai_text=ai_reply,
+                tech_block=tech_block
+            )
+            if pdf_bytes:
+                st.download_button("📄 PDF İndir", pdf_bytes, "analiz.pdf", "application/pdf")
+            else:
+                st.warning("PDF oluşturulamadı.")
+
+        with tab2:
+            st.pyplot(draw_chart_visual(data["visual_data"], data["cusps"]))
+
+        with tab3:
+            c_a, c_b = st.columns(2)
+            with c_a:
+                st.markdown("### 🪐 Doğum Haritası")
+                st.markdown(data["info_html"], unsafe_allow_html=True)
+            with c_b:
+                st.markdown("### 📐 Açılar")
+                for asp in data["aspects"]:
+                    st.markdown(f"<div class='aspect-box'>{asp}</div>", unsafe_allow_html=True)
+                if transit_mode:
+                    st.markdown(data["transit_html"], unsafe_allow_html=True)
+
+        with tab4:
+            st.markdown("### 📈 Dağılımlar")
+            element_quality_charts(data["elem_counts"], data["qual_counts"])
+
+    except Exception as e:
+        st.error("Bir hata oluştu (detay aşağıda).")
+        st.exception(e)
